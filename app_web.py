@@ -230,7 +230,7 @@ menu = st.sidebar.radio(
 )
 
 # =========================================================
-# MÓDULO 1: DASHBOARD (COM GRÁFICOS RECONFIGURADOS E LIMPOS)
+# MÓDULO 1: DASHBOARD
 # =========================================================
 if menu == "📊 Visão Geral / Dashboard":
     st.title("📊 Painel Geral do Estoque")
@@ -257,9 +257,8 @@ if menu == "📊 Visão Geral / Dashboard":
     with col_g1:
         st.subheader("📦 Top 10 Itens com Maior Quantidade")
         if not df_est.empty and 'quanti' in df_est.columns and df_est['quanti'].sum() > 0:
-            # Agrupa por nome para somar quantidades de itens com nomes iguais
             df_top = df_est.groupby('nome', as_index=False)['quanti'].sum()
-            df_top = df_top.sort_values(by='quanti', ascending=True).tail(10) # Para exibir o maior no topo
+            df_top = df_top.sort_values(by='quanti', ascending=True).tail(10)
             
             fig_bar = px.bar(
                 df_top,
@@ -538,13 +537,14 @@ elif menu == "📦 Movimentação de Estoque":
                     st.rerun()
 
 # =========================================================
-# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS
+# MÓDULO 4: CADASTRO, EDIÇÃO E ATUALIZAÇÃO EM LOTE DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
     
-    tab_cad, tab_edit = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente"])
+    tab_cad, tab_edit, tab_lote = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente", "⚡ Atualização NCM em Lote"])
     
+    # SUB-ABA 1: CADASTRO INDIVIDUAL
     with tab_cad:
         with st.form("form_cadastro_original", clear_on_submit=True):
             nome = st.text_input("Nome do Material *")
@@ -598,6 +598,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     finally:
                         conn.close()
 
+    # SUB-ABA 2: EDIÇÃO INDIVIDUAL
     with tab_edit:
         conn = conectar_banco()
         df_edit = pd.read_sql_query("SELECT * FROM estoque ORDER BY nome ASC", conn)
@@ -636,6 +637,45 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         conn.close()
                         st.success("Material atualizado com sucesso!")
                         st.rerun()
+
+    # SUB-ABA 3: CORREÇÃO / ATUALIZAÇÃO EM LOTE DE NCMS
+    with tab_lote:
+        st.subheader("⚡ Atualizar NCM de Múltiplos Itens por Palavra-Chave")
+        st.caption("Use esta opção para corrigir rapidamente NCMs cadastrados incorretamente em lote.")
+        
+        col_l1, col_l2 = st.columns(2)
+        with col_l1:
+            termo_busca = st.text_input("Palavra-Chave (ex: CARREGADOR, BATERIA, RODA):")
+        with col_l2:
+            novo_ncm_lote = st.text_input("Novo NCM Correto (XXXX.XX.XX):", placeholder="Ex: 8504.40.10")
+            
+        if st.button("🚀 Aplicar Correção em Lote"):
+            if not termo_busca or not novo_ncm_lote:
+                st.warning("Preencha a Palavra-Chave e o Novo NCM!")
+            elif not validar_ncm(novo_ncm_lote):
+                st.error("Formato do NCM inválido! Utilize o padrão XXXX.XX.XX")
+            else:
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE estoque 
+                    SET ncm = ? 
+                    WHERE (nome LIKE ? OR cod LIKE ? OR cod_ref LIKE ?)
+                """, (
+                    novo_ncm_lote.strip(),
+                    f"%{termo_busca.strip()}%",
+                    f"%{termo_busca.strip()}%",
+                    f"%{termo_busca.strip()}%"
+                ))
+                modificados = cursor.rowcount
+                conn.commit()
+                conn.close()
+                
+                if modificados > 0:
+                    st.success(f"🚀 Sucesso! {modificados} item(ns) contendo '{termo_busca}' foram atualizados para o NCM {novo_ncm_lote}.")
+                    st.rerun()
+                else:
+                    st.info(f"Nenhum item foi encontrado com o termo '{termo_busca}'.")
 
 # =========================================================
 # MÓDULO 5: HISTÓRICO
