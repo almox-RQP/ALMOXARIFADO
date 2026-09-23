@@ -51,7 +51,6 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
     except Exception:
         pass
 
-# Busca inteligente das imagens do GitHub (caso o nome do arquivo mude no upload)
 def resolver_imagem(caminho_db):
     if not caminho_db:
         return None
@@ -71,7 +70,7 @@ def resolver_imagem(caminho_db):
     return None
 
 # =========================================================
-# 2. INICIALIZAÇÃO DO BANCO DE DADOS E TABELAS
+# 2. INICIALIZAÇÃO DO BANCO DE DADOS E ADEQUAÇÃO DE COLUNAS
 # =========================================================
 def inicializar_banco():
     conn = conectar_banco()
@@ -128,6 +127,17 @@ def inicializar_banco():
             usuario TEXT DEFAULT 'Sistema'
         )
     """)
+    
+    # Adiciona colunas ausentes caso o banco antigo não as possua
+    try:
+        cursor.execute("ALTER TABLE historico ADD COLUMN observacao TEXT")
+    except Exception:
+        pass
+        
+    try:
+        cursor.execute("ALTER TABLE historico ADD COLUMN usuario TEXT DEFAULT 'Sistema'")
+    except Exception:
+        pass
     
     conn.commit()
     conn.close()
@@ -221,7 +231,7 @@ menu = st.sidebar.radio(
 )
 
 # =========================================================
-# MÓDULO 1: DASHBOARD COMPLETO (MÉTRICAS + GRÁFICOS + BUSCA)
+# MÓDULO 1: DASHBOARD
 # =========================================================
 if menu == "📊 Visão Geral / Dashboard":
     st.title("📊 Painel Geral do Estoque")
@@ -287,7 +297,7 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS (COM O NOVO STATUS)
+# MÓDULO 2: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -379,7 +389,6 @@ elif menu == "🛠️ Gestão de Consertos":
                 st.write(f"**Defeito:** {row['defeito']}")
 
             with col_status:
-                # SELETOR DE STATUS: Permite alternar entre 'Em Conserto' e 'Em espera de coleta'
                 opcoes_status = ["Em Conserto", "Em espera de coleta"]
                 status_atual = row['status'] if row['status'] in opcoes_status else "Em Conserto"
                 
@@ -415,7 +424,7 @@ elif menu == "🛠️ Gestão de Consertos":
             st.divider()
 
 # =========================================================
-# MÓDULO 3: MOVIMENTAÇÃO DE ESTOQUE (ENTRADA / SAÍDA)
+# MÓDULO 3: MOVIMENTAÇÃO DE ESTOQUE
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
@@ -463,7 +472,7 @@ elif menu == "📦 Movimentação de Estoque":
                     st.rerun()
 
 # =========================================================
-# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS (COM NCM OBRIGATÓRIO)
+# MÓDULO 4: CADASTRO E EDIÇÃO
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
@@ -563,22 +572,28 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         st.rerun()
 
 # =========================================================
-# MÓDULO 5: HISTÓRICO DE LOGS
+# MÓDULO 5: HISTÓRICO COM CONSULTA SEGURA
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações Gerais")
 
     conn = conectar_banco()
-    df_hist = pd.read_sql_query(
-        "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade, observacao AS Observação, usuario AS Usuário FROM historico ORDER BY id DESC",
-        conn,
-    )
+    try:
+        df_hist = pd.read_sql_query(
+            "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade, observacao AS Observação, usuario AS Usuário FROM historico ORDER BY id DESC",
+            conn
+        )
+    except Exception:
+        df_hist = pd.read_sql_query(
+            "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade FROM historico ORDER BY id DESC",
+            conn
+        )
     conn.close()
 
     st.dataframe(df_hist, use_container_width=True)
 
 # =========================================================
-# MÓDULO 6: CONSULTA RÁPIDA NCM
+# MÓDULO 6: CONSULTA NCM
 # =========================================================
 elif menu == "🔍 Consulta Rápida NCM":
     st.title("🔍 Consulta Rápida de NCMs no Estoque")
