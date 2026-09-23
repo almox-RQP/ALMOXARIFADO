@@ -59,24 +59,20 @@ def resolver_imagem(caminho_db):
     if not caminho_db or str(caminho_db).strip() == "":
         return None
     
-    # 1. Tenta o caminho exato
     if os.path.exists(caminho_db):
         return caminho_db
     
-    # 2. Tenta encontrar pelo nome do arquivo limpo na pasta uploads
     nome_arquivo = os.path.basename(caminho_db).strip()
     caminho_direto = os.path.join(PASTA_UPLOADS, nome_arquivo)
     if os.path.exists(caminho_direto):
         return caminho_direto
     
-    # 3. Busca por correspondência parcial na pasta uploads
     if os.path.exists(PASTA_UPLOADS):
         arquivos_pasta = os.listdir(PASTA_UPLOADS)
         for f in arquivos_pasta:
             if nome_arquivo.lower() in f.lower() or f.lower() in nome_arquivo.lower():
                 return os.path.join(PASTA_UPLOADS, f)
             
-            # Compara timestamp ex: peca_20260921_171548
             partes_orig = nome_arquivo.split('_')
             if len(partes_orig) >= 3:
                 chave = f"{partes_orig[0]}_{partes_orig[1]}_{partes_orig[2]}"
@@ -86,7 +82,40 @@ def resolver_imagem(caminho_db):
     return None
 
 # =========================================================
-# 2. INICIALIZAÇÃO DO BANCO E AUTORESGATE DE REGISTROS DA NUVEM
+# FUNÇÃO PARA EXCLUIR REGISTRO DE CONSERTO E FOTOS
+# =========================================================
+def excluir_conserto(id_conserto):
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_nome, caminho_foto_peca, caminho_foto_nf FROM consertos WHERE id = ?", (id_conserto,))
+    res = cursor.fetchone()
+    
+    if res:
+        nome_item, foto_p, foto_nf = res[0], res[1], res[2]
+        
+        # Remove arquivos de imagem se existirem
+        img_p = resolver_imagem(foto_p)
+        if img_p and os.path.exists(img_p):
+            try: os.remove(img_p)
+            except: pass
+            
+        img_n = resolver_imagem(foto_nf)
+        if img_n and os.path.exists(img_n):
+            try: os.remove(img_n)
+            except: pass
+
+        # Apaga do banco de dados
+        cursor.execute("DELETE FROM consertos WHERE id = ?", (id_conserto,))
+        conn.commit()
+        conn.close()
+        
+        registrar_historico("EXCLUSAO_CONSERTO", nome_item, 1, "Registro excluído manualmente")
+        return True
+    conn.close()
+    return False
+
+# =========================================================
+# 2. INICIALIZAÇÃO DO BANCO
 # =========================================================
 def inicializar_banco():
     conn = conectar_banco()
@@ -144,19 +173,14 @@ def inicializar_banco():
         )
     """)
     
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN observacao TEXT")
-    except Exception:
-        pass
+    try: cursor.execute("ALTER TABLE historico ADD COLUMN observacao TEXT")
+    except Exception: pass
         
-    try:
-        cursor.execute("ALTER TABLE historico ADD COLUMN usuario TEXT DEFAULT 'Sistema'")
-    except Exception:
-        pass
+    try: cursor.execute("ALTER TABLE historico ADD COLUMN usuario TEXT DEFAULT 'Sistema'")
+    except Exception: pass
     
     conn.commit()
 
-    # AUTORESGATE: Se o banco estiver vazio na nuvem, recria os cadastros baseados nos arquivos do GitHub
     cursor.execute("SELECT COUNT(*) FROM consertos")
     total_consertos = cursor.fetchone()[0]
     
@@ -166,7 +190,6 @@ def inicializar_banco():
         
         for p in pecas:
             caminho_p = os.path.join(PASTA_UPLOADS, p)
-            # Tenta encontrar a NF correspondente
             timestamp = p.replace('peca_', '').split('_WhatsApp')[0]
             nf_correspondente = ""
             for f in arquivos:
@@ -199,7 +222,6 @@ inicializar_banco()
 def verificar_licenca():
     conn = conectar_banco()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT valor FROM configuracoes WHERE chave='master_unlocked'")
     unlocked = cursor.fetchone()
     if unlocked and unlocked[0] == '1':
@@ -214,7 +236,6 @@ def verificar_licenca():
         data_inst = datetime.strptime(res[0], "%Y-%m-%d")
         if (datetime.now() - data_inst).days > 90:
             st.error("🔒 LICENÇA EXPIRADA - Bloqueio de Segurança Ativado")
-            st.write("Insira o Código Master para liberar o acesso ao sistema.")
             codigo = st.text_input("Código Master:", type="password")
             if st.button("Desbloquear Sistema"):
                 if codigo == "202739":
@@ -360,7 +381,7 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS
+# MÓDULO 2: GESTÃO DE CONSERTOS (COM OPÇÃO DE EXCLUSÃO)
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -440,18 +461,14 @@ elif menu == "🛠️ Gestão de Consertos":
                     img_peca = resolver_imagem(row['caminho_foto_peca'])
                     with col_p:
                         st.caption("📷 Foto Peça")
-                        if img_peca:
-                            st.image(img_peca, use_container_width=True)
-                        else:
-                            st.info("Sem foto")
+                        if img_peca: st.image(img_peca, use_container_width=True)
+                        else: st.info("Sem foto")
                     
                     img_nf = resolver_imagem(row['caminho_foto_nf'])
                     with col_nf:
                         st.caption("📄 Foto NF")
-                        if img_nf:
-                            st.image(img_nf, use_container_width=True)
-                        else:
-                            st.info("Sem foto NF")
+                        if img_nf: st.image(img_nf, use_container_width=True)
+                        else: st.info("Sem foto NF")
 
                 with col_detalhes:
                     st.subheader(f"**{row['item_nome']}**")
@@ -463,7 +480,7 @@ elif menu == "🛠️ Gestão de Consertos":
 
                 with col_acao:
                     st.warning("Status: Aguardando Coleta")
-                    if st.button("🚚 Confirmar Coleta (Enviar p/ Manutenção)", key=f"col_{row['id']}"):
+                    if st.button("🚚 Confirmar Coleta", key=f"col_{row['id']}"):
                         conn = conectar_banco()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE consertos SET status = 'Em Conserto' WHERE id = ?", (row['id'],))
@@ -472,6 +489,11 @@ elif menu == "🛠️ Gestão de Consertos":
                         registrar_historico("COLETADO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
                         st.success("Coleta confirmada! Peça movida para 'Em Manutenção'.")
                         st.rerun()
+
+                    if st.button("🗑️ Excluir Registro", key=f"del_col_{row['id']}", type="secondary"):
+                        if excluir_conserto(row['id']):
+                            st.success("Registo excluído com sucesso!")
+                            st.rerun()
 
                 st.divider()
 
@@ -493,18 +515,14 @@ elif menu == "🛠️ Gestão de Consertos":
                     img_peca = resolver_imagem(row['caminho_foto_peca'])
                     with col_p:
                         st.caption("📷 Foto Peça")
-                        if img_peca:
-                            st.image(img_peca, use_container_width=True)
-                        else:
-                            st.info("Sem foto")
+                        if img_peca: st.image(img_peca, use_container_width=True)
+                        else: st.info("Sem foto")
                     
                     img_nf = resolver_imagem(row['caminho_foto_nf'])
                     with col_nf:
                         st.caption("📄 Foto NF")
-                        if img_nf:
-                            st.image(img_nf, use_container_width=True)
-                        else:
-                            st.info("Sem foto NF")
+                        if img_nf: st.image(img_nf, use_container_width=True)
+                        else: st.info("Sem foto NF")
 
                 with col_detalhes:
                     st.subheader(f"**{row['item_nome']}**")
@@ -525,6 +543,11 @@ elif menu == "🛠️ Gestão de Consertos":
                         registrar_historico("RETORNO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
                         st.success("Retorno registrado com sucesso!")
                         st.rerun()
+
+                    if st.button("🗑️ Excluir Registro", key=f"del_man_{row['id']}", type="secondary"):
+                        if excluir_conserto(row['id']):
+                            st.success("Registo excluído com sucesso!")
+                            st.rerun()
 
                 st.divider()
 
@@ -650,14 +673,14 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     finally:
                         conn.close()
 
-    # SUB-ABA 2: EDIÇÃO INDIVIDUAL
+    # SUB-ABA 2: EDIÇÃO INDIVIDUAL E EXCLUSÃO
     with tab_edit:
         conn = conectar_banco()
         df_edit = pd.read_sql_query("SELECT * FROM estoque ORDER BY nome ASC", conn)
         conn.close()
 
         if not df_edit.empty:
-            mat_nom_sel = st.selectbox("Selecione o Material para Editar:", df_edit['nome'].tolist())
+            mat_nom_sel = st.selectbox("Selecione o Material para Editar ou Excluir:", df_edit['nome'].tolist())
             row_e = df_edit[df_edit['nome'] == mat_nom_sel].iloc[0]
 
             with st.form("form_edicao_material"):
@@ -690,11 +713,20 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         st.success("Material atualizado com sucesso!")
                         st.rerun()
 
+            # Opção de excluir do estoque
+            if st.button(f"❌ Excluir Permanentemente '{row_e['nome']}' do Estoque"):
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM estoque WHERE id = ?", (row_e['id'],))
+                conn.commit()
+                conn.close()
+                registrar_historico("EXCLUSAO_ESTOQUE", row_e['nome'], 0)
+                st.success("Material removido do estoque!")
+                st.rerun()
+
     # SUB-ABA 3: CORREÇÃO / ATUALIZAÇÃO EM LOTE DE NCMS
     with tab_lote:
         st.subheader("⚡ Atualizar NCM de Múltiplos Itens por Palavra-Chave")
-        st.caption("Use esta opção para corrigir rapidamente NCMs cadastrados incorretamente em lote.")
-        
         col_l1, col_l2 = st.columns(2)
         with col_l1:
             termo_busca = st.text_input("Palavra-Chave (ex: CARREGADOR, BATERIA, RODA):")
