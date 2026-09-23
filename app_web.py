@@ -230,7 +230,7 @@ menu = st.sidebar.radio(
 )
 
 # =========================================================
-# MÓDULO 1: DASHBOARD
+# MÓDULO 1: DASHBOARD (COM GRÁFICOS RECONFIGURADOS E LIMPOS)
 # =========================================================
 if menu == "📊 Visão Geral / Dashboard":
     st.title("📊 Painel Geral do Estoque")
@@ -252,30 +252,45 @@ if menu == "📊 Visão Geral / Dashboard":
 
     st.divider()
 
-    col_g1, col_g2 = st.columns(2)
+    col_g1, col_g2 = st.columns([1.8, 1])
+    
     with col_g1:
         st.subheader("📦 Top 10 Itens com Maior Quantidade")
         if not df_est.empty and 'quanti' in df_est.columns and df_est['quanti'].sum() > 0:
-            top_itens = df_est.sort_values(by='quanti', ascending=False).head(10)
+            # Agrupa por nome para somar quantidades de itens com nomes iguais
+            df_top = df_est.groupby('nome', as_index=False)['quanti'].sum()
+            df_top = df_top.sort_values(by='quanti', ascending=True).tail(10) # Para exibir o maior no topo
+            
             fig_bar = px.bar(
-                top_itens,
-                x='nome',
-                y='quanti',
-                labels={'nome': 'Item / Material', 'quanti': 'Quantidade'},
-                text_auto=True,
-                color='quanti'
+                df_top,
+                x='quanti',
+                y='nome',
+                orientation='h',
+                text='quanti',
+                labels={'nome': 'Item / Material', 'quanti': 'Quantidade em Estoque'},
+                color_discrete_sequence=['#1f77b4']
+            )
+            fig_bar.update_traces(textposition='outside')
+            fig_bar.update_layout(
+                yaxis={'categoryorder': 'total ascending', 'title': ''},
+                xaxis_title="Quantidade",
+                margin=dict(l=20, r=20, t=20, b=20),
+                height=380
             )
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
             st.info("Sem dados suficientes para gráficos.")
 
     with col_g2:
-        st.subheader("📍 Distribuição por Estante")
+        st.subheader("📍 Resumo de Itens por Estante")
         if not df_est.empty and 'estante' in df_est.columns and df_est['estante'].notna().any():
-            df_estante = df_est['estante'].value_counts().reset_index()
-            df_estante.columns = ['Estante', 'Quantidade']
-            fig_pie = px.pie(df_estante, names='Estante', values='Quantidade', hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            df_estante = df_est.groupby('estante', as_index=False).agg(
+                Itens=('id', 'count'),
+                Total_Unidades=('quanti', 'sum')
+            ).rename(columns={'estante': 'Estante', 'Total_Unidades': 'Unidades Total'})
+            
+            df_estante['Estante'] = df_estante['Estante'].replace('', 'Não Informada')
+            st.dataframe(df_estante, use_container_width=True, hide_index=True)
         else:
             st.info("Sem dados de localização por estante.")
 
@@ -296,7 +311,7 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS (COM AS 4 ETAPAS)
+# MÓDULO 2: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -308,9 +323,7 @@ elif menu == "🛠️ Gestão de Consertos":
         "✅ 4. Peças Retornadas"
     ])
     
-    # ---------------------------------------------------------
     # TAB 1: CADASTRO
-    # ---------------------------------------------------------
     with tab_cad:
         st.subheader("Cadastrar Nova Peça para Manutenção")
         with st.form("form_conserto_novo", clear_on_submit=True):
@@ -358,9 +371,7 @@ elif menu == "🛠️ Gestão de Consertos":
                     st.success("Peça cadastrada com sucesso! Agora está em 'Aguardando Coleta'.")
                     st.rerun()
 
-    # ---------------------------------------------------------
     # TAB 2: AGUARDANDO COLETA
-    # ---------------------------------------------------------
     with tab_coleta:
         st.subheader("⏳ Peças Aguardando Coleta para Ir à Oficina")
         conn = conectar_banco()
@@ -413,9 +424,7 @@ elif menu == "🛠️ Gestão de Consertos":
 
                 st.divider()
 
-    # ---------------------------------------------------------
     # TAB 3: EM MANUTENÇÃO
-    # ---------------------------------------------------------
     with tab_manut:
         st.subheader("🛠️ Peças em Manutenção na Oficina")
         conn = conectar_banco()
@@ -468,9 +477,7 @@ elif menu == "🛠️ Gestão de Consertos":
 
                 st.divider()
 
-    # ---------------------------------------------------------
-    # TAB 4: PEÇAS RETORNADAS (HISTÓRICO)
-    # ---------------------------------------------------------
+    # TAB 4: PEÇAS RETORNADAS
     with tab_ret:
         st.subheader("✅ Histórico de Peças Retornadas da Manutenção")
         conn = conectar_banco()
