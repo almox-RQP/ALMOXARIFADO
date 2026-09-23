@@ -8,7 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 # =========================================================
-# 1. CONFIGURAÇÃO DA PÁGINA E DIRETÓRIOS
+# 1. CONFIGURAÇÃO DA PÁGINA E DIRETÓRIOS (CAMINHOS ABSOLUTOS)
 # =========================================================
 st.set_page_config(
     page_title="Estoque Requipel",
@@ -16,8 +16,10 @@ st.set_page_config(
     layout="wide"
 )
 
-ARQUIVO_BANCO = "banco_almoxarifado.db"
-PASTA_UPLOADS = "uploads_conserto"
+# Garante que o script encontra a pasta e o banco onde quer que seja executado
+DIRETORIO_BASE = os.path.dirname(os.path.abspath(__file__))
+ARQUIVO_BANCO = os.path.join(DIRETORIO_BASE, "banco_almoxarifado.db")
+PASTA_UPLOADS = os.path.join(DIRETORIO_BASE, "uploads_conserto")
 
 if not os.path.exists(PASTA_UPLOADS):
     os.makedirs(PASTA_UPLOADS)
@@ -52,7 +54,7 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
         pass
 
 # =========================================================
-# FUNÇÃO RESGATADORA DE IMAGENS (NÃO PERDE FOTOS ANTIGAS)
+# FUNÇÃO RESGATADORA DE IMAGENS (INTEGRIDADE TOTAL)
 # =========================================================
 def resolver_imagem(caminho_db):
     if not caminho_db or str(caminho_db).strip() == "":
@@ -68,15 +70,13 @@ def resolver_imagem(caminho_db):
     if os.path.exists(caminho_direto):
         return caminho_direto
     
-    # 3. Busca por similaridade/prefixo na pasta uploads (Resgate de emergência)
+    # 3. Busca por similaridade/prefixo na pasta uploads
     if os.path.exists(PASTA_UPLOADS):
         arquivos_pasta = os.listdir(PASTA_UPLOADS)
-        # Tenta bater parte do nome do arquivo
         for f in arquivos_pasta:
             if nome_arquivo in f or f in nome_arquivo:
                 return os.path.join(PASTA_UPLOADS, f)
         
-        # Tenta pegar pelos primeiros 10 caracteres do nome
         prefixo = nome_arquivo.split('.')[0][:10] if '.' in nome_arquivo else nome_arquivo[:10]
         if prefixo:
             for f in arquivos_pasta:
