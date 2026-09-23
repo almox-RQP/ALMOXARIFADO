@@ -1,7 +1,6 @@
 import os
 import re
 import sqlite3
-import glob
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
@@ -42,26 +41,26 @@ def registrar_historico(tipo, item_nome, quantidade):
     except Exception:
         pass
 
-# Função Inteligente para Encontrar a Foto mesmo que o Nome Mudou no GitHub
-def buscar_caminho_foto(caminho_salvo):
-    if not caminho_salvo:
+# Função de busca simples de imagem que procura dentro da pasta uploads_conserto
+def resolver_imagem(caminho_db):
+    if not caminho_db:
         return None
-    # 1. Tenta o caminho exato
-    if os.path.exists(caminho_salvo):
-        return caminho_salvo
+    # 1. Se o caminho exato existir, usa ele
+    if os.path.exists(caminho_db):
+        return caminho_db
     
-    # 2. Se não achou exato, busca pelo nome base do arquivo na pasta uploads_conserto
-    nome_arquivo = os.path.basename(caminho_salvo)
+    # 2. Procura pelo nome do arquivo na pasta de uploads
+    nome_arquivo = os.path.basename(caminho_db)
+    caminho_direto = os.path.join(PASTA_UPLOADS, nome_arquivo)
+    if os.path.exists(caminho_direto):
+        return caminho_direto
     
-    # Pega o prefixo (ex: peca_20260921_171548)
-    partes = nome_arquivo.split('.')
-    prefixo = partes[0] if partes else nome_arquivo
-    
-    # Procura na pasta por qualquer arquivo que comece com esse prefixo
-    arquivos_encontrados = glob.glob(os.path.join(PASTA_UPLOADS, f"{prefixo}*"))
-    if arquivos_encontrados:
-        return arquivos_encontrados[0]
-        
+    # 3. Tenta encontrar qualquer arquivo na pasta que contenha parte do nome (ex: peca_20260921)
+    if os.path.exists(PASTA_UPLOADS):
+         prefixo = nome_arquivo.split('.')[0][:15] if '.' in nome_arquivo else nome_arquivo[:15]
+         for f in os.listdir(PASTA_UPLOADS):
+             if prefixo and prefixo in f:
+                 return os.path.join(PASTA_UPLOADS, f)
     return None
 
 # =========================================================
@@ -71,6 +70,7 @@ def inicializar_banco():
     conn = conectar_banco()
     cursor = conn.cursor()
     
+    # Tabela de Licenciamento
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -82,6 +82,7 @@ def inicializar_banco():
     if not cursor.fetchone():
         cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES ('data_instalacao', ?)", (datetime.now().strftime("%Y-%m-%d"),))
 
+    # Tabela Estoque
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS estoque (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +98,7 @@ def inicializar_banco():
         )
     """)
 
+    # Tabela Consertos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS consertos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,6 +114,7 @@ def inicializar_banco():
         )
     """)
 
+    # Tabela Historico
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,14 +254,14 @@ elif opcao == "🛠️ Gestão de Consertos":
                 else:
                     p_peca = ""
                     p_nf = ""
-                    time_stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                     
                     if f_peca:
-                        p_peca = os.path.join(PASTA_UPLOADS, f"peca_{time_stamp}_{f_peca.name}")
+                        p_peca = os.path.join(PASTA_UPLOADS, f"peca_{time_str}_{f_peca.name}")
                         with open(p_peca, "wb") as f:
                             f.write(f_peca.getbuffer())
                     if f_nf:
-                        p_nf = os.path.join(PASTA_UPLOADS, f"nf_{time_stamp}_{f_nf.name}")
+                        p_nf = os.path.join(PASTA_UPLOADS, f"nf_{time_str}_{f_nf.name}")
                         with open(p_nf, "wb") as f:
                             f.write(f_nf.getbuffer())
 
@@ -277,7 +280,8 @@ elif opcao == "🛠️ Gestão de Consertos":
     st.divider()
 
     conn = conectar_banco()
-    df_consertos = pd.read_sql_query("SELECT * FROM consertos WHERE status != 'Retornado' ORDER BY id DESC", conn)
+    # Traz todos os consertos que NÃO estejam marcados como 'Retornado'
+    df_consertos = pd.read_sql_query("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado' ORDER BY id DESC", conn)
     conn.close()
 
     if df_consertos.empty:
@@ -289,21 +293,19 @@ elif opcao == "🛠️ Gestão de Consertos":
             with col_img:
                 col_p, col_nf = st.columns(2)
                 
-                # Busca Inteligente de Foto da Peça
-                foto_peca_path = buscar_caminho_foto(row['caminho_foto_peca'])
+                img_peca = resolver_imagem(row['caminho_foto_peca'])
                 with col_p:
                     st.caption("📷 Foto da Peça")
-                    if foto_peca_path:
-                        st.image(foto_peca_path, use_container_width=True)
+                    if img_peca:
+                        st.image(img_peca, use_container_width=True)
                     else:
                         st.info("Sem foto cadastrada")
                 
-                # Busca Inteligente de Foto da NF
-                foto_nf_path = buscar_caminho_foto(row['caminho_foto_nf'])
+                img_nf = resolver_imagem(row['caminho_foto_nf'])
                 with col_nf:
                     st.caption("📄 Foto da NF")
-                    if foto_nf_path:
-                        st.image(foto_nf_path, use_container_width=True)
+                    if img_nf:
+                        st.image(img_nf, use_container_width=True)
                     else:
                         st.info("Sem foto da NF")
 
