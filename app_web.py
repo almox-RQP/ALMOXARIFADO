@@ -51,22 +51,38 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
     except Exception:
         pass
 
+# =========================================================
+# FUNÇÃO RESGATADORA DE IMAGENS (NÃO PERDE FOTOS ANTIGAS)
+# =========================================================
 def resolver_imagem(caminho_db):
-    if not caminho_db:
+    if not caminho_db or str(caminho_db).strip() == "":
         return None
+    
+    # 1. Tenta o caminho exato salvo no banco
     if os.path.exists(caminho_db):
         return caminho_db
     
+    # 2. Tenta encontrar pelo nome do arquivo dentro da pasta uploads_conserto
     nome_arquivo = os.path.basename(caminho_db)
     caminho_direto = os.path.join(PASTA_UPLOADS, nome_arquivo)
     if os.path.exists(caminho_direto):
         return caminho_direto
     
+    # 3. Busca por similaridade/prefixo na pasta uploads (Resgate de emergência)
     if os.path.exists(PASTA_UPLOADS):
-        prefixo = nome_arquivo.split('.')[0][:15] if '.' in nome_arquivo else nome_arquivo[:15]
-        for f in os.listdir(PASTA_UPLOADS):
-            if prefixo and prefixo in f:
+        arquivos_pasta = os.listdir(PASTA_UPLOADS)
+        # Tenta bater parte do nome do arquivo
+        for f in arquivos_pasta:
+            if nome_arquivo in f or f in nome_arquivo:
                 return os.path.join(PASTA_UPLOADS, f)
+        
+        # Tenta pegar pelos primeiros 10 caracteres do nome
+        prefixo = nome_arquivo.split('.')[0][:10] if '.' in nome_arquivo else nome_arquivo[:10]
+        if prefixo:
+            for f in arquivos_pasta:
+                if prefixo in f:
+                    return os.path.join(PASTA_UPLOADS, f)
+
     return None
 
 # =========================================================
@@ -350,11 +366,13 @@ elif menu == "🛠️ Gestão de Consertos":
                     time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                     
                     if f_peca:
-                        p_peca = os.path.join(PASTA_UPLOADS, f"peca_{time_str}_{f_peca.name}")
+                        nome_f_peca = f"peca_{time_str}_{f_peca.name}"
+                        p_peca = os.path.join(PASTA_UPLOADS, nome_f_peca)
                         with open(p_peca, "wb") as f:
                             f.write(f_peca.getbuffer())
                     if f_nf:
-                        p_nf = os.path.join(PASTA_UPLOADS, f"nf_{time_str}_{f_nf.name}")
+                        nome_f_nf = f"nf_{time_str}_{f_nf.name}"
+                        p_nf = os.path.join(PASTA_UPLOADS, nome_f_nf)
                         with open(p_nf, "wb") as f:
                             f.write(f_nf.getbuffer())
 
