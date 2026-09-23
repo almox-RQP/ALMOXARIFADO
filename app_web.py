@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import glob
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
@@ -25,64 +26,67 @@ def conectar_banco():
     return sqlite3.connect(ARQUIVO_BANCO)
 
 def validar_ncm(ncm):
+    if not ncm:
+        return False
     padrao = r"^\d{4}\.\d{2}\.\d{2}$"
     return re.match(padrao, ncm.strip()) is not None
 
-def registrar_historico(tipo, item_nome, quantidade):
+def registrar_historico(tipo, item_nome, quantidade, obs=""):
     try:
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO historico (data_hora, tipo, item_nome, quantidade)
-            VALUES (?, ?, ?, ?)
-        """, (datetime.now().strftime("%d/%m/%Y %H:%M:%S"), tipo, item_nome, quantidade))
+            INSERT INTO historico (data_hora, tipo, item_nome, quantidade, observacao, usuario)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            tipo,
+            item_nome,
+            quantidade,
+            obs,
+            st.session_state.get('usuario_logado', 'Sistema')
+        ))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
-# Função de busca simples de imagem que procura dentro da pasta uploads_conserto
+# Busca inteligente das imagens do GitHub (caso o nome do arquivo mude no upload)
 def resolver_imagem(caminho_db):
     if not caminho_db:
         return None
-    # 1. Se o caminho exato existir, usa ele
     if os.path.exists(caminho_db):
         return caminho_db
     
-    # 2. Procura pelo nome do arquivo na pasta de uploads
     nome_arquivo = os.path.basename(caminho_db)
     caminho_direto = os.path.join(PASTA_UPLOADS, nome_arquivo)
     if os.path.exists(caminho_direto):
         return caminho_direto
     
-    # 3. Tenta encontrar qualquer arquivo na pasta que contenha parte do nome (ex: peca_20260921)
     if os.path.exists(PASTA_UPLOADS):
-         prefixo = nome_arquivo.split('.')[0][:15] if '.' in nome_arquivo else nome_arquivo[:15]
-         for f in os.listdir(PASTA_UPLOADS):
-             if prefixo and prefixo in f:
-                 return os.path.join(PASTA_UPLOADS, f)
+        prefixo = nome_arquivo.split('.')[0][:15] if '.' in nome_arquivo else nome_arquivo[:15]
+        for f in os.listdir(PASTA_UPLOADS):
+            if prefixo and prefixo in f:
+                return os.path.join(PASTA_UPLOADS, f)
     return None
 
 # =========================================================
-# 2. INICIALIZAÇÃO DO BANCO DE DADOS
+# 2. INICIALIZAÇÃO DO BANCO DE DADOS E TABELAS
 # =========================================================
 def inicializar_banco():
     conn = conectar_banco()
     cursor = conn.cursor()
     
-    # Tabela de Licenciamento
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
             valor TEXT
         )
     """)
-    
     cursor.execute("SELECT valor FROM configuracoes WHERE chave='data_instalacao'")
     if not cursor.fetchone():
         cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES ('data_instalacao', ?)", (datetime.now().strftime("%Y-%m-%d"),))
 
-    # Tabela Estoque
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS estoque (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +102,6 @@ def inicializar_banco():
         )
     """)
 
-    # Tabela Consertos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS consertos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,14 +117,15 @@ def inicializar_banco():
         )
     """)
 
-    # Tabela Historico
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             data_hora TEXT,
             tipo TEXT,
             item_nome TEXT,
-            quantidade INTEGER
+            quantidade INTEGER,
+            observacao TEXT,
+            usuario TEXT DEFAULT 'Sistema'
         )
     """)
     
@@ -151,7 +155,8 @@ def verificar_licenca():
         data_inst = datetime.strptime(res[0], "%Y-%m-%d")
         if (datetime.now() - data_inst).days > 90:
             st.error("🔒 LICENÇA EXPIRADA - Bloqueio de Segurança Ativado")
-            codigo = st.text_input("Insira o Código Master de Liberação:", type="password")
+            st.write("Insira o Código Master para liberar o acesso ao sistema.")
+            codigo = st.text_input("Código Master:", type="password")
             if st.button("Desbloquear Sistema"):
                 if codigo == "202739":
                     conn = conectar_banco()
@@ -170,7 +175,7 @@ if not verificar_licenca():
     st.stop()
 
 # =========================================================
-# 4. TELA DE LOGIN
+# 4. AUTENTICAÇÃO E LOGIN
 # =========================================================
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
@@ -192,43 +197,99 @@ if not st.session_state["autenticado"]:
     st.stop()
 
 # =========================================================
-# 5. MENU LATERAL
+# 5. MENU LATERAL DE NAVEGAÇÃO
 # =========================================================
 st.sidebar.title("🏢 Estoque Requipel")
-st.sidebar.caption(f"Usuário: {st.session_state.get('usuario_logado', 'Admin')}")
+st.sidebar.caption(f"Usuário ativo: {st.session_state.get('usuario_logado', 'Admin')}")
 
-if st.sidebar.button("🚪 Sair"):
+if st.sidebar.button("🚪 Sair / Logout"):
     st.session_state["autenticado"] = False
     st.rerun()
 
 st.sidebar.divider()
 
-opcao = st.sidebar.radio(
-    "Navegação:",
+menu = st.sidebar.radio(
+    "Navegação do Sistema:",
     [
         "📊 Visão Geral / Dashboard",
         "🛠️ Gestão de Consertos",
-        "📦 Cadastrar Peça",
-        "📜 Histórico (Logs)"
+        "📦 Movimentação de Estoque",
+        "➕ Cadastrar / Editar Peças",
+        "📜 Histórico (Logs)",
+        "🔍 Consulta Rápida NCM"
     ]
 )
 
 # =========================================================
-# 6. DASHBOARD / VISÃO GERAL
+# MÓDULO 1: DASHBOARD COMPLETO (MÉTRICAS + GRÁFICOS + BUSCA)
 # =========================================================
-if opcao == "📊 Visão Geral / Dashboard":
-    st.title("📊 Visão Geral do Estoque")
+if menu == "📊 Visão Geral / Dashboard":
+    st.title("📊 Painel Geral do Estoque")
     
     conn = conectar_banco()
     df_est = pd.read_sql_query("SELECT * FROM estoque", conn)
+    df_cons = pd.read_sql_query("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado'", conn)
     conn.close()
 
-    st.dataframe(df_est, use_container_width=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total de Itens Cadastrados", len(df_est))
+    m2.metric("Peças em Conserto", len(df_cons))
+    
+    qtd_total = df_est['quanti'].sum() if not df_est.empty and 'quanti' in df_est.columns else 0
+    m3.metric("Unidades em Estoque", int(qtd_total))
+    
+    valor_total = (df_est['quanti'] * df_est['preco']).sum() if not df_est.empty and 'preco' in df_est.columns else 0.0
+    m4.metric("Valor do Estoque (R$)", f"R$ {valor_total:,.2f}")
+
+    st.divider()
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.subheader("📦 Top 10 Itens com Maior Quantidade")
+        if not df_est.empty and 'quanti' in df_est.columns and df_est['quanti'].sum() > 0:
+            top_itens = df_est.sort_values(by='quanti', ascending=False).head(10)
+            fig_bar = px.bar(
+                top_itens,
+                x='nome',
+                y='quanti',
+                labels={'nome': 'Item / Material', 'quanti': 'Quantidade'},
+                text_auto=True,
+                color='quanti'
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes para gráficos.")
+
+    with col_g2:
+        st.subheader("📍 Distribuição por Estante")
+        if not df_est.empty and 'estante' in df_est.columns and df_est['estante'].notna().any():
+            df_estante = df_est['estante'].value_counts().reset_index()
+            df_estante.columns = ['Estante', 'Quantidade']
+            fig_pie = px.pie(df_estante, names='Estante', values='Quantidade', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Sem dados de localização por estante.")
+
+    st.divider()
+    st.subheader("📋 Tabela do Estoque Geral")
+    
+    busca = st.text_input("🔍 Pesquisar material por Nome, Código, Referência ou NCM:")
+    if busca and not df_est.empty:
+        df_exibir = df_est[
+            df_est['nome'].astype(str).str.contains(busca, case=False, na=False) |
+            df_est['cod'].astype(str).str.contains(busca, case=False, na=False) |
+            df_est['cod_ref'].astype(str).str.contains(busca, case=False, na=False) |
+            df_est['ncm'].astype(str).str.contains(busca, case=False, na=False)
+        ]
+    else:
+        df_exibir = df_est
+
+    st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# 7. GESTÃO DE CONSERTOS
+# MÓDULO 2: GESTÃO DE CONSERTOS (COM O NOVO STATUS)
 # =========================================================
-elif opcao == "🛠️ Gestão de Consertos":
+elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
     
     with st.expander("➕ Enviar Nova Peça para Conserto", expanded=False):
@@ -248,9 +309,9 @@ elif opcao == "🛠️ Gestão de Consertos":
             with f_img2:
                 f_nf = st.file_uploader("Foto da NF", type=["png", "jpg", "jpeg"])
             
-            if st.form_submit_button("🚀 Enviar para Conserto"):
+            if st.form_submit_button("🚀 Confirmar Envio para Conserto"):
                 if not item_nome or not oficina:
-                    st.error("Preencha o nome da peça e a oficina.")
+                    st.error("Preencha o Nome da Peça e a Oficina.")
                 else:
                     p_peca = ""
                     p_nf = ""
@@ -273,20 +334,20 @@ elif opcao == "🛠️ Gestão de Consertos":
                     """, (item_nome, cod_ref, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), oficina, num_nf, defeito, p_peca, p_nf))
                     conn.commit()
                     conn.close()
-                    registrar_historico("ENVIO_CONSERTO", item_nome, 1)
+                    registrar_historico("ENVIO_CONSERTO", item_nome, 1, f"Oficina: {oficina}")
                     st.success("Enviado com sucesso!")
                     st.rerun()
 
     st.divider()
 
     conn = conectar_banco()
-    # Traz todos os consertos que NÃO estejam marcados como 'Retornado'
     df_consertos = pd.read_sql_query("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado' ORDER BY id DESC", conn)
     conn.close()
 
     if df_consertos.empty:
-        st.info("Nenhuma peça em conserto no momento.")
+        st.info("Nenhuma peça em conserto ou aguardando coleta no momento.")
     else:
+        st.write(f"### Peças em Manutenção ({len(df_consertos)})")
         for idx, row in df_consertos.iterrows():
             col_img, col_detalhes, col_status = st.columns([1.5, 3, 1.5])
             
@@ -295,7 +356,7 @@ elif opcao == "🛠️ Gestão de Consertos":
                 
                 img_peca = resolver_imagem(row['caminho_foto_peca'])
                 with col_p:
-                    st.caption("📷 Foto da Peça")
+                    st.caption("📷 Foto Peça")
                     if img_peca:
                         st.image(img_peca, use_container_width=True)
                     else:
@@ -303,7 +364,7 @@ elif opcao == "🛠️ Gestão de Consertos":
                 
                 img_nf = resolver_imagem(row['caminho_foto_nf'])
                 with col_nf:
-                    st.caption("📄 Foto da NF")
+                    st.caption("📄 Foto NF")
                     if img_nf:
                         st.image(img_nf, use_container_width=True)
                     else:
@@ -318,6 +379,7 @@ elif opcao == "🛠️ Gestão de Consertos":
                 st.write(f"**Defeito:** {row['defeito']}")
 
             with col_status:
+                # SELETOR DE STATUS: Permite alternar entre 'Em Conserto' e 'Em espera de coleta'
                 opcoes_status = ["Em Conserto", "Em espera de coleta"]
                 status_atual = row['status'] if row['status'] in opcoes_status else "Em Conserto"
                 
@@ -339,84 +401,190 @@ elif opcao == "🛠️ Gestão de Consertos":
 
                 st.write("---")
                 with st.popover("✅ Registrar Retorno"):
+                    st.write("Confirmar retorno desta peça ao estoque?")
                     if st.button("Confirmar Retorno ao Estoque", key=f"ret_{row['id']}"):
                         conn = conectar_banco()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE consertos SET status = 'Retornado' WHERE id = ?", (row['id'],))
                         conn.commit()
                         conn.close()
-                        registrar_historico("RETORNO_CONSERTO", row['item_nome'], 1)
-                        st.success("Retorno registrado!")
+                        registrar_historico("RETORNO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
+                        st.success("Retorno registrado com sucesso!")
                         st.rerun()
 
             st.divider()
 
 # =========================================================
-# 8. CADASTRO DE PEÇAS
+# MÓDULO 3: MOVIMENTAÇÃO DE ESTOQUE (ENTRADA / SAÍDA)
 # =========================================================
-elif opcao == "📦 Cadastrar Peça":
-    st.title("📦 Cadastrar Novo Material")
+elif menu == "📦 Movimentação de Estoque":
+    st.title("📦 Movimentação de Entrada e Saída de Materiais")
     
-    with st.form("form_cadastro_original", clear_on_submit=True):
-        nome = st.text_input("Nome do Material *")
-        cod = st.text_input("Código Interno:")
-        ref = st.text_input("Código de Referência:")
-        ncm = st.text_input("NCM (Formato XXXX.XX.XX) *")
-        preco = st.number_input("Preço (R$):", min_value=0.0, step=0.01)
-        estante = st.text_input("Estante:")
-        prateleira = st.text_input("Prateleira:")
-        caixa = st.text_input("Caixa / Posição:")
-        qtd = st.number_input("Quantidade Inicial:", min_value=0, step=1)
+    conn = conectar_banco()
+    df_estoque = pd.read_sql_query("SELECT id, nome, cod, quanti FROM estoque ORDER BY nome ASC", conn)
+    conn.close()
 
-        btn_salvar = st.form_submit_button("💾 SALVAR E CADASTRAR OUTRO")
+    if df_estoque.empty:
+        st.warning("Nenhum material cadastrado para movimentar.")
+    else:
+        opcoes_mat = {f"{row['nome']} | Cód: {row['cod']} (Estoque: {row['quanti']})": row['id'] for idx, row in df_estoque.iterrows()}
+        mat_sel = st.selectbox("Selecione o Material:", list(opcoes_mat.keys()))
+        mat_id = opcoes_mat[mat_sel]
 
-        if btn_salvar:
-            if not nome:
-                st.warning("O campo Nome do Material é obrigatório!")
-            elif not ncm:
-                st.error("O campo NCM é obrigatório!")
-            elif not validar_ncm(ncm):
-                st.error("Formato do NCM inválido! Utilize o padrão de 8 dígitos com pontos (ex: 8481.80.99).")
-            else:
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute(
-                        """
-                        INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            nome,
-                            cod,
-                            ref,
-                            ncm.strip(),
-                            estante,
-                            prateleira,
-                            caixa,
-                            qtd,
-                            preco,
-                        ),
-                    )
-                    conn.commit()
-                    registrar_historico("CADASTRO", nome, qtd)
-                    st.success(f"Material '{nome}' cadastrado com sucesso! Os campos foram limpos.")
-                except sqlite3.Error as e:
-                    st.error(f"Erro ao salvar no banco: {e}")
-                finally:
+        col1, col2 = st.columns(2)
+        with col1:
+            tipo_mov = st.radio("Tipo de Movimentação:", ["ENTRADA (Adicionar)", "SAÍDA (Remover)"])
+            qtd_mov = st.number_input("Quantidade:", min_value=1, step=1)
+        with col2:
+            obs_mov = st.text_area("Observação / Destino / Motivo:")
+
+        if st.button("🚀 Confirmar Movimentação"):
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT nome, quanti FROM estoque WHERE id = ?", (mat_id,))
+            res_mat = cursor.fetchone()
+            if res_mat:
+                nome_mat, qtd_atual = res_mat[0], res_mat[1]
+
+                if "SAÍDA" in tipo_mov and qtd_mov > qtd_atual:
+                    st.error("Quantidade de saída é maior do que o estoque disponível!")
                     conn.close()
+                else:
+                    nova_qtd = (qtd_atual + qtd_mov) if "ENTRADA" in tipo_mov else (qtd_atual - qtd_mov)
+                    cursor.execute("UPDATE estoque SET quanti = ? WHERE id = ?", (nova_qtd, mat_id))
+                    conn.commit()
+                    conn.close()
+                    
+                    tipo_str = "ENTRADA" if "ENTRADA" in tipo_mov else "SAÍDA"
+                    registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
+                    
+                    st.success(f"Movimentação realizada! Novo estoque de '{nome_mat}': {nova_qtd}")
+                    st.rerun()
 
 # =========================================================
-# 9. HISTÓRICO
+# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS (COM NCM OBRIGATÓRIO)
 # =========================================================
-elif opcao == "📜 Histórico (Logs)":
+elif menu == "➕ Cadastrar / Editar Peças":
+    st.title("➕ Gestão de Peças e Materiais")
+    
+    tab_cad, tab_edit = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente"])
+    
+    with tab_cad:
+        with st.form("form_cadastro_original", clear_on_submit=True):
+            nome = st.text_input("Nome do Material *")
+            c1, c2 = st.columns(2)
+            with c1:
+                cod = st.text_input("Código Interno:")
+                ref = st.text_input("Código de Referência:")
+                ncm = st.text_input("NCM (Formato XXXX.XX.XX) *", placeholder="Ex: 8481.80.99")
+                preco = st.number_input("Preço (R$):", min_value=0.0, step=0.01)
+            with c2:
+                estante = st.text_input("Estante:")
+                prateleira = st.text_input("Prateleira:")
+                caixa = st.text_input("Caixa / Posição:")
+                qtd = st.number_input("Quantidade Inicial:", min_value=0, step=1)
+
+            btn_salvar = st.form_submit_button("💾 SALVAR E CADASTRAR OUTRO")
+
+            if btn_salvar:
+                if not nome:
+                    st.warning("O campo Nome do Material é obrigatório!")
+                elif not ncm:
+                    st.error("O campo NCM é obrigatório!")
+                elif not validar_ncm(ncm):
+                    st.error("Formato do NCM inválido! Utilize o padrão de 8 dígitos com pontos (ex: 8481.80.99).")
+                else:
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                nome,
+                                cod,
+                                ref,
+                                ncm.strip(),
+                                estante,
+                                prateleira,
+                                caixa,
+                                qtd,
+                                preco,
+                            ),
+                        )
+                        conn.commit()
+                        registrar_historico("CADASTRO", nome, qtd)
+                        st.success(f"Material '{nome}' cadastrado com sucesso! Os campos foram limpos.")
+                    except sqlite3.Error as e:
+                        st.error(f"Erro ao salvar no banco: {e}")
+                    finally:
+                        conn.close()
+
+    with tab_edit:
+        conn = conectar_banco()
+        df_edit = pd.read_sql_query("SELECT * FROM estoque ORDER BY nome ASC", conn)
+        conn.close()
+
+        if not df_edit.empty:
+            mat_nom_sel = st.selectbox("Selecione o Material para Editar:", df_edit['nome'].tolist())
+            row_e = df_edit[df_edit['nome'] == mat_nom_sel].iloc[0]
+
+            with st.form("form_edicao_material"):
+                enome = st.text_input("Nome", value=str(row_e['nome']))
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    ecod = st.text_input("Código", value=str(row_e['cod']) if row_e['cod'] else "")
+                    eref = st.text_input("REF", value=str(row_e['cod_ref']) if row_e['cod_ref'] else "")
+                    encm = st.text_input("NCM", value=str(row_e['ncm']) if row_e['ncm'] else "")
+                    epreco = st.number_input("Preço", value=float(row_e['preco']) if row_e['preco'] else 0.0)
+                with ec2:
+                    eestante = st.text_input("Estante", value=str(row_e['estante']) if row_e['estante'] else "")
+                    eprat = st.text_input("Prateleira", value=str(row_e['prateleira']) if row_e['prateleira'] else "")
+                    ecaixa = st.text_input("Caixa", value=str(row_e['caixa']) if row_e['caixa'] else "")
+                    eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
+
+                b_edit = st.form_submit_button("Atualizar Cadastro")
+                if b_edit:
+                    if not validar_ncm(encm):
+                        st.error("Formato NCM inválido! Use XXXX.XX.XX")
+                    else:
+                        conn = conectar_banco()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE estoque SET nome=?, cod=?, cod_ref=?, ncm=?, estante=?, prateleira=?, caixa=?, quanti=?, preco=?
+                            WHERE id=?
+                        """, (enome, ecod, eref, encm, eestante, eprat, ecaixa, eqtd, epreco, row_e['id']))
+                        conn.commit()
+                        conn.close()
+                        st.success("Material atualizado com sucesso!")
+                        st.rerun()
+
+# =========================================================
+# MÓDULO 5: HISTÓRICO DE LOGS
+# =========================================================
+elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações Gerais")
 
     conn = conectar_banco()
     df_hist = pd.read_sql_query(
-        "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade FROM historico ORDER BY id DESC",
+        "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade, observacao AS Observação, usuario AS Usuário FROM historico ORDER BY id DESC",
         conn,
     )
     conn.close()
 
     st.dataframe(df_hist, use_container_width=True)
+
+# =========================================================
+# MÓDULO 6: CONSULTA RÁPIDA NCM
+# =========================================================
+elif menu == "🔍 Consulta Rápida NCM":
+    st.title("🔍 Consulta Rápida de NCMs no Estoque")
+    
+    conn = conectar_banco()
+    df_ncm = pd.read_sql_query("SELECT cod AS Código, nome AS Material, ncm AS NCM, estante AS Estante FROM estoque", conn)
+    conn.close()
+
+    st.dataframe(df_ncm, use_container_width=True)
