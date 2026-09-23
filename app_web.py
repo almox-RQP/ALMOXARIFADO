@@ -81,9 +81,6 @@ def resolver_imagem(caminho_db):
 
     return None
 
-# =========================================================
-# FUNÇÃO PARA EXCLUIR REGISTRO DE CONSERTO E FOTOS
-# =========================================================
 def excluir_conserto(id_conserto):
     conn = conectar_banco()
     cursor = conn.cursor()
@@ -93,7 +90,6 @@ def excluir_conserto(id_conserto):
     if res:
         nome_item, foto_p, foto_nf = res[0], res[1], res[2]
         
-        # Remove arquivos de imagem se existirem
         img_p = resolver_imagem(foto_p)
         if img_p and os.path.exists(img_p):
             try: os.remove(img_p)
@@ -104,7 +100,6 @@ def excluir_conserto(id_conserto):
             try: os.remove(img_n)
             except: pass
 
-        # Apaga do banco de dados
         cursor.execute("DELETE FROM consertos WHERE id = ?", (id_conserto,))
         conn.commit()
         conn.close()
@@ -381,7 +376,7 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS (COM OPÇÃO DE EXCLUSÃO)
+# MÓDULO 2: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -570,54 +565,73 @@ elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
     
     conn = conectar_banco()
-    df_estoque = pd.read_sql_query("SELECT id, nome, cod, quanti FROM estoque ORDER BY nome ASC", conn)
+    df_estoque = pd.read_sql_query("SELECT id, nome, cod, cod_ref, quanti FROM estoque ORDER BY nome ASC", conn)
     conn.close()
 
     if df_estoque.empty:
         st.warning("Nenhum material cadastrado para movimentar.")
     else:
-        opcoes_mat = {f"{row['nome']} | Cód: {row['cod']} (Estoque: {row['quanti']})": row['id'] for idx, row in df_estoque.iterrows()}
-        mat_sel = st.selectbox("Selecione o Material:", list(opcoes_mat.keys()))
-        mat_id = opcoes_mat[mat_sel]
-
-        col1, col2 = st.columns(2)
-        with col1:
-            tipo_mov = st.radio("Tipo de Movimentação:", ["ENTRADA (Adicionar)", "SAÍDA (Remover)"])
-            qtd_mov = st.number_input("Quantidade:", min_value=1, step=1)
-        with col2:
-            obs_mov = st.text_area("Observação / Destino / Motivo:")
-
-        if st.button("🚀 Confirmar Movimentação"):
-            conn = conectar_banco()
-            cursor = conn.cursor()
+        # Busca em tempo real por Nome, Código Interno ou REF
+        termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
+        
+        df_filtrado = df_estoque.copy()
+        if termo_busca:
+            df_filtrado = df_estoque[
+                df_estoque['nome'].astype(str).str.contains(termo_busca, case=False, na=False) |
+                df_estoque['cod'].astype(str).str.contains(termo_busca, case=False, na=False) |
+                df_estoque['cod_ref'].astype(str).str.contains(termo_busca, case=False, na=False)
+            ]
+        
+        if df_filtrado.empty:
+            st.error("Nenhuma peça encontrada com o termo pesquisado.")
+        else:
+            # Rótulo ultra explicativo mostrando todos os identificadores no dropdown
+            opcoes_mat = {
+                f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (Qtd: {row['quanti']}) - ID #{row['id']}": row['id'] 
+                for idx, row in df_filtrado.iterrows()
+            }
             
-            cursor.execute("SELECT nome, quanti FROM estoque WHERE id = ?", (mat_id,))
-            res_mat = cursor.fetchone()
-            if res_mat:
-                nome_mat, qtd_atual = res_mat[0], res_mat[1]
+            mat_sel = st.selectbox("Selecione o Material Desejado:", list(opcoes_mat.keys()))
+            mat_id = opcoes_mat[mat_sel]
 
-                if "SAÍDA" in tipo_mov and qtd_mov > qtd_atual:
-                    st.error("Quantidade de saída é maior do que o estoque disponível!")
-                    conn.close()
-                else:
-                    nova_qtd = (qtd_atual + qtd_mov) if "ENTRADA" in tipo_mov else (qtd_atual - qtd_mov)
-                    cursor.execute("UPDATE estoque SET quanti = ? WHERE id = ?", (nova_qtd, mat_id))
-                    conn.commit()
-                    conn.close()
-                    
-                    tipo_str = "ENTRADA" if "ENTRADA" in tipo_mov else "SAÍDA"
-                    registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
-                    
-                    st.success(f"Movimentação realizada! Novo estoque de '{nome_mat}': {nova_qtd}")
-                    st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                tipo_mov = st.radio("Tipo de Movimentação:", ["ENTRADA (Adicionar)", "SAÍDA (Remover)"])
+                qtd_mov = st.number_input("Quantidade:", min_value=1, step=1)
+            with col2:
+                obs_mov = st.text_area("Observação / Destino / Motivo:")
+
+            if st.button("🚀 Confirmar Movimentação"):
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT nome, quanti FROM estoque WHERE id = ?", (mat_id,))
+                res_mat = cursor.fetchone()
+                if res_mat:
+                    nome_mat, qtd_atual = res_mat[0], res_mat[1]
+
+                    if "SAÍDA" in tipo_mov and qtd_mov > qtd_atual:
+                        st.error("Quantidade de saída é maior do que o estoque disponível!")
+                        conn.close()
+                    else:
+                        nova_qtd = (qtd_atual + qtd_mov) if "ENTRADA" in tipo_mov else (qtd_atual - qtd_mov)
+                        cursor.execute("UPDATE estoque SET quanti = ? WHERE id = ?", (nova_qtd, mat_id))
+                        conn.commit()
+                        conn.close()
+                        
+                        tipo_str = "ENTRADA" if "ENTRADA" in tipo_mov else "SAÍDA"
+                        registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
+                        
+                        st.success(f"Movimentação realizada! Novo estoque de '{nome_mat}': {nova_qtd}")
+                        st.rerun()
 
 # =========================================================
-# MÓDULO 4: CADASTRO, EDIÇÃO E ATUALIZAÇÃO EM LOTE DE PEÇAS
+# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
     
-    tab_cad, tab_edit, tab_lote = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente", "⚡ Atualização NCM em Lote"])
+    tab_cad, tab_edit = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente"])
     
     # SUB-ABA 1: CADASTRO INDIVIDUAL
     with tab_cad:
@@ -673,93 +687,79 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     finally:
                         conn.close()
 
-    # SUB-ABA 2: EDIÇÃO INDIVIDUAL E EXCLUSÃO
+    # SUB-ABA 2: EDIÇÃO ESTRITAMENTE INDIVIDUAL POR ID E FILTRO
     with tab_edit:
         conn = conectar_banco()
         df_edit = pd.read_sql_query("SELECT * FROM estoque ORDER BY nome ASC", conn)
         conn.close()
 
         if not df_edit.empty:
-            mat_nom_sel = st.selectbox("Selecione o Material para Editar ou Excluir:", df_edit['nome'].tolist())
-            row_e = df_edit[df_edit['nome'] == mat_nom_sel].iloc[0]
-
-            with st.form("form_edicao_material"):
-                enome = st.text_input("Nome", value=str(row_e['nome']))
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    ecod = st.text_input("Código", value=str(row_e['cod']) if row_e['cod'] else "")
-                    eref = st.text_input("REF", value=str(row_e['cod_ref']) if row_e['cod_ref'] else "")
-                    encm = st.text_input("NCM", value=str(row_e['ncm']) if row_e['ncm'] else "")
-                    epreco = st.number_input("Preço", value=float(row_e['preco']) if row_e['preco'] else 0.0)
-                with ec2:
-                    eestante = st.text_input("Estante", value=str(row_e['estante']) if row_e['estante'] else "")
-                    eprat = st.text_input("Prateleira", value=str(row_e['prateleira']) if row_e['prateleira'] else "")
-                    ecaixa = st.text_input("Caixa", value=str(row_e['caixa']) if row_e['caixa'] else "")
-                    eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
-
-                b_edit = st.form_submit_button("Atualizar Cadastro")
-                if b_edit:
-                    if not validar_ncm(encm):
-                        st.error("Formato NCM inválido! Use XXXX.XX.XX")
-                    else:
-                        conn = conectar_banco()
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            UPDATE estoque SET nome=?, cod=?, cod_ref=?, ncm=?, estante=?, prateleira=?, caixa=?, quanti=?, preco=?
-                            WHERE id=?
-                        """, (enome, ecod, eref, encm, eestante, eprat, ecaixa, eqtd, epreco, row_e['id']))
-                        conn.commit()
-                        conn.close()
-                        st.success("Material atualizado com sucesso!")
-                        st.rerun()
-
-            # Opção de excluir do estoque
-            if st.button(f"❌ Excluir Permanentemente '{row_e['nome']}' do Estoque"):
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM estoque WHERE id = ?", (row_e['id'],))
-                conn.commit()
-                conn.close()
-                registrar_historico("EXCLUSAO_ESTOQUE", row_e['nome'], 0)
-                st.success("Material removido do estoque!")
-                st.rerun()
-
-    # SUB-ABA 3: CORREÇÃO / ATUALIZAÇÃO EM LOTE DE NCMS
-    with tab_lote:
-        st.subheader("⚡ Atualizar NCM de Múltiplos Itens por Palavra-Chave")
-        col_l1, col_l2 = st.columns(2)
-        with col_l1:
-            termo_busca = st.text_input("Palavra-Chave (ex: CARREGADOR, BATERIA, RODA):")
-        with col_l2:
-            novo_ncm_lote = st.text_input("Novo NCM Correto (XXXX.XX.XX):", placeholder="Ex: 8504.40.10")
+            # Campo de busca para filtrar a peça desejada
+            busca_edit = st.text_input("🔍 Pesquisar Peça para Edição por Nome, Código Interno ou REF:")
             
-        if st.button("🚀 Aplicar Correção em Lote"):
-            if not termo_busca or not novo_ncm_lote:
-                st.warning("Preencha a Palavra-Chave e o Novo NCM!")
-            elif not validar_ncm(novo_ncm_lote):
-                st.error("Formato do NCM inválido! Utilize o padrão XXXX.XX.XX")
+            df_edit_filtrado = df_edit.copy()
+            if busca_edit:
+                df_edit_filtrado = df_edit[
+                    df_edit['nome'].astype(str).str.contains(busca_edit, case=False, na=False) |
+                    df_edit['cod'].astype(str).str.contains(busca_edit, case=False, na=False) |
+                    df_edit['cod_ref'].astype(str).str.contains(busca_edit, case=False, na=False)
+                ]
+
+            if df_edit_filtrado.empty:
+                st.warning("Nenhuma peça encontrada com os dados informados.")
             else:
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE estoque 
-                    SET ncm = ? 
-                    WHERE (nome LIKE ? OR cod LIKE ? OR cod_ref LIKE ?)
-                """, (
-                    novo_ncm_lote.strip(),
-                    f"%{termo_busca.strip()}%",
-                    f"%{termo_busca.strip()}%",
-                    f"%{termo_busca.strip()}%"
-                ))
-                modificados = cursor.rowcount
-                conn.commit()
-                conn.close()
+                # Mapeamento com Nome, Cód Interno, REF e ID para diferenciar peças de mesmo nome
+                opcoes_materiais = {
+                    f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} | NCM: {row['ncm']} (ID #{row['id']})": row['id'] 
+                    for _, row in df_edit_filtrado.iterrows()
+                }
+                mat_selecionado = st.selectbox("Selecione a peça exata para Editar:", list(opcoes_materiais.keys()))
+                id_material = opcoes_materiais[mat_selecionado]
                 
-                if modificados > 0:
-                    st.success(f"🚀 Sucesso! {modificados} item(ns) contendo '{termo_busca}' foram atualizados para o NCM {novo_ncm_lote}.")
+                # Dados exclusivos da peça selecionada
+                row_e = df_edit[df_edit['id'] == id_material].iloc[0]
+
+                with st.form(f"form_edicao_{id_material}"):
+                    st.caption(f"✍️ Editando exclusivamente o registro ID #{id_material}")
+                    enome = st.text_input("Nome", value=str(row_e['nome']))
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        ecod = st.text_input("Código Interno", value=str(row_e['cod']) if row_e['cod'] else "")
+                        eref = st.text_input("Código de Referência (REF)", value=str(row_e['cod_ref']) if row_e['cod_ref'] else "")
+                        encm = st.text_input("NCM Exclusivo desta Peça", value=str(row_e['ncm']) if row_e['ncm'] else "")
+                        epreco = st.number_input("Preço", value=float(row_e['preco']) if row_e['preco'] else 0.0)
+                    with ec2:
+                        eestante = st.text_input("Estante", value=str(row_e['estante']) if row_e['estante'] else "")
+                        eprat = st.text_input("Prateleira", value=str(row_e['prateleira']) if row_e['prateleira'] else "")
+                        ecaixa = st.text_input("Caixa", value=str(row_e['caixa']) if row_e['caixa'] else "")
+                        eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
+
+                    b_edit = st.form_submit_button("💾 Salvar Alterações Apenas Nesta Peça")
+                    if b_edit:
+                        if not validar_ncm(encm):
+                            st.error("Formato NCM inválido! Use XXXX.XX.XX")
+                        else:
+                            conn = conectar_banco()
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                UPDATE estoque 
+                                SET nome=?, cod=?, cod_ref=?, ncm=?, estante=?, prateleira=?, caixa=?, quanti=?, preco=?
+                                WHERE id=?
+                            """, (enome, ecod, eref, encm.strip(), eestante, eprat, ecaixa, eqtd, epreco, id_material))
+                            conn.commit()
+                            conn.close()
+                            st.success(f"Alterações na peça '{enome}' (ID #{id_material}) salvas com sucesso!")
+                            st.rerun()
+
+                if st.button(f"❌ Excluir Apenas '{row_e['nome']}' (ID #{id_material}) do Estoque", key=f"del_est_{id_material}"):
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM estoque WHERE id = ?", (id_material,))
+                    conn.commit()
+                    conn.close()
+                    registrar_historico("EXCLUSAO_ESTOQUE", row_e['nome'], 0)
+                    st.success("Material removido do estoque!")
                     st.rerun()
-                else:
-                    st.info(f"Nenhum item foi encontrado com o termo '{termo_busca}'.")
 
 # =========================================================
 # MÓDULO 5: HISTÓRICO
@@ -789,7 +789,7 @@ elif menu == "🔍 Consulta Rápida NCM":
     st.title("🔍 Consulta Rápida de NCMs no Estoque")
     
     conn = conectar_banco()
-    df_ncm = pd.read_sql_query("SELECT cod AS Código, nome AS Material, ncm AS NCM, estante AS Estante FROM estoque", conn)
+    df_ncm = pd.read_sql_query("SELECT cod AS Código, cod_ref AS 'Cód. REF', nome AS Material, ncm AS NCM, estante AS Estante FROM estoque", conn)
     conn.close()
 
     st.dataframe(df_ncm, use_container_width=True)
