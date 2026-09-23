@@ -16,7 +16,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Garante que o script encontra a pasta e o banco onde quer que seja executado
 DIRETORIO_BASE = os.path.dirname(os.path.abspath(__file__))
 ARQUIVO_BANCO = os.path.join(DIRETORIO_BASE, "banco_almoxarifado.db")
 PASTA_UPLOADS = os.path.join(DIRETORIO_BASE, "uploads_conserto")
@@ -54,39 +53,40 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
         pass
 
 # =========================================================
-# FUNÇÃO RESGATADORA DE IMAGENS (INTEGRIDADE TOTAL)
+# FUNÇÃO RESGATADORA INTELIGENTE DE IMAGENS
 # =========================================================
 def resolver_imagem(caminho_db):
     if not caminho_db or str(caminho_db).strip() == "":
         return None
     
-    # 1. Tenta o caminho exato salvo no banco
+    # 1. Tenta o caminho exato
     if os.path.exists(caminho_db):
         return caminho_db
     
-    # 2. Tenta encontrar pelo nome do arquivo dentro da pasta uploads_conserto
-    nome_arquivo = os.path.basename(caminho_db)
+    # 2. Tenta encontrar pelo nome do arquivo limpo na pasta uploads
+    nome_arquivo = os.path.basename(caminho_db).strip()
     caminho_direto = os.path.join(PASTA_UPLOADS, nome_arquivo)
     if os.path.exists(caminho_direto):
         return caminho_direto
     
-    # 3. Busca por similaridade/prefixo na pasta uploads
+    # 3. Busca por correspondência parcial na pasta uploads
     if os.path.exists(PASTA_UPLOADS):
         arquivos_pasta = os.listdir(PASTA_UPLOADS)
         for f in arquivos_pasta:
-            if nome_arquivo in f or f in nome_arquivo:
+            if nome_arquivo.lower() in f.lower() or f.lower() in nome_arquivo.lower():
                 return os.path.join(PASTA_UPLOADS, f)
-        
-        prefixo = nome_arquivo.split('.')[0][:10] if '.' in nome_arquivo else nome_arquivo[:10]
-        if prefixo:
-            for f in arquivos_pasta:
-                if prefixo in f:
+            
+            # Compara timestamp ex: peca_20260921_171548
+            partes_orig = nome_arquivo.split('_')
+            if len(partes_orig) >= 3:
+                chave = f"{partes_orig[0]}_{partes_orig[1]}_{partes_orig[2]}"
+                if chave.lower() in f.lower():
                     return os.path.join(PASTA_UPLOADS, f)
 
     return None
 
 # =========================================================
-# 2. INICIALIZAÇÃO DO BANCO DE DADOS
+# 2. INICIALIZAÇÃO DO BANCO E AUTORESGATE DE REGISTROS DA NUVEM
 # =========================================================
 def inicializar_banco():
     conn = conectar_banco()
@@ -155,6 +155,40 @@ def inicializar_banco():
         pass
     
     conn.commit()
+
+    # AUTORESGATE: Se o banco estiver vazio na nuvem, recria os cadastros baseados nos arquivos do GitHub
+    cursor.execute("SELECT COUNT(*) FROM consertos")
+    total_consertos = cursor.fetchone()[0]
+    
+    if total_consertos == 0 and os.path.exists(PASTA_UPLOADS):
+        arquivos = os.listdir(PASTA_UPLOADS)
+        pecas = [f for f in arquivos if f.startswith('peca_')]
+        
+        for p in pecas:
+            caminho_p = os.path.join(PASTA_UPLOADS, p)
+            # Tenta encontrar a NF correspondente
+            timestamp = p.replace('peca_', '').split('_WhatsApp')[0]
+            nf_correspondente = ""
+            for f in arquivos:
+                if f.startswith('nf_') and timestamp in f:
+                    nf_correspondente = os.path.join(PASTA_UPLOADS, f)
+                    break
+            
+            cursor.execute("""
+                INSERT INTO consertos (item_nome, cod_ref, data_envio, oficina, num_nf, defeito, caminho_foto_peca, caminho_foto_nf, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Em Conserto')
+            """, (
+                f"Peça Recarregada ({p[:20]})",
+                "REF-AUTO",
+                datetime.now().strftime("%d/%m/%Y"),
+                "Oficina Cadastrada",
+                "N/A",
+                "Item resgatado automaticamente dos arquivos do GitHub.",
+                caminho_p,
+                nf_correspondente,
+            ))
+        conn.commit()
+
     conn.close()
 
 inicializar_banco()
@@ -366,12 +400,12 @@ elif menu == "🛠️ Gestão de Consertos":
                     time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                     
                     if f_peca:
-                        nome_f_peca = f"peca_{time_str}_{f_peca.name}"
+                        nome_f_peca = f"peca_{time_str}_{f_peca.name.replace(' ', '_')}"
                         p_peca = os.path.join(PASTA_UPLOADS, nome_f_peca)
                         with open(p_peca, "wb") as f:
                             f.write(f_peca.getbuffer())
                     if f_nf:
-                        nome_f_nf = f"nf_{time_str}_{f_nf.name}"
+                        nome_f_nf = f"nf_{time_str}_{f_nf.name.replace(' ', '_')}"
                         p_nf = os.path.join(PASTA_UPLOADS, nome_f_nf)
                         with open(p_nf, "wb") as f:
                             f.write(f_nf.getbuffer())
