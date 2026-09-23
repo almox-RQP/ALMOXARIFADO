@@ -70,7 +70,7 @@ def resolver_imagem(caminho_db):
     return None
 
 # =========================================================
-# 2. INICIALIZAÇÃO DO BANCO DE DADOS E ADEQUAÇÃO DE COLUNAS
+# 2. INICIALIZAÇÃO DO BANCO DE DADOS
 # =========================================================
 def inicializar_banco():
     conn = conectar_banco()
@@ -112,7 +112,7 @@ def inicializar_banco():
             defeito TEXT,
             caminho_foto_peca TEXT,
             caminho_foto_nf TEXT,
-            status TEXT DEFAULT 'Em Conserto'
+            status TEXT DEFAULT 'Aguardando Coleta'
         )
     """)
 
@@ -128,7 +128,6 @@ def inicializar_banco():
         )
     """)
     
-    # Adiciona colunas ausentes caso o banco antigo não as possua
     try:
         cursor.execute("ALTER TABLE historico ADD COLUMN observacao TEXT")
     except Exception:
@@ -243,7 +242,7 @@ if menu == "📊 Visão Geral / Dashboard":
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total de Itens Cadastrados", len(df_est))
-    m2.metric("Peças em Conserto", len(df_cons))
+    m2.metric("Peças em Conserto / Coleta", len(df_cons))
     
     qtd_total = df_est['quanti'].sum() if not df_est.empty and 'quanti' in df_est.columns else 0
     m3.metric("Unidades em Estoque", int(qtd_total))
@@ -297,12 +296,23 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS
+# MÓDULO 2: GESTÃO DE CONSERTOS (COM AS 4 ETAPAS)
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
     
-    with st.expander("➕ Enviar Nova Peça para Conserto", expanded=False):
+    tab_cad, tab_coleta, tab_manut, tab_ret = st.tabs([
+        "➕ 1. Cadastrar Manutenção",
+        "⏳ 2. Aguardando Coleta",
+        "🛠️ 3. Em Manutenção (Oficina)",
+        "✅ 4. Peças Retornadas"
+    ])
+    
+    # ---------------------------------------------------------
+    # TAB 1: CADASTRO
+    # ---------------------------------------------------------
+    with tab_cad:
+        st.subheader("Cadastrar Nova Peça para Manutenção")
         with st.form("form_conserto_novo", clear_on_submit=True):
             f_col1, f_col2 = st.columns(2)
             with f_col1:
@@ -319,7 +329,7 @@ elif menu == "🛠️ Gestão de Consertos":
             with f_img2:
                 f_nf = st.file_uploader("Foto da NF", type=["png", "jpg", "jpeg"])
             
-            if st.form_submit_button("🚀 Confirmar Envio para Conserto"):
+            if st.form_submit_button("💾 Cadastrar (Marcar 'Aguardando Coleta')"):
                 if not item_nome or not oficina:
                     st.error("Preencha o Nome da Peça e a Oficina.")
                 else:
@@ -340,78 +350,113 @@ elif menu == "🛠️ Gestão de Consertos":
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO consertos (item_nome, cod_ref, data_envio, oficina, num_nf, defeito, caminho_foto_peca, caminho_foto_nf, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Em Conserto')
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Aguardando Coleta')
                     """, (item_nome, cod_ref, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), oficina, num_nf, defeito, p_peca, p_nf))
                     conn.commit()
                     conn.close()
-                    registrar_historico("ENVIO_CONSERTO", item_nome, 1, f"Oficina: {oficina}")
-                    st.success("Enviado com sucesso!")
+                    registrar_historico("CADASTRO_CONSERTO", item_nome, 1, f"Oficina: {oficina}")
+                    st.success("Peça cadastrada com sucesso! Agora está em 'Aguardando Coleta'.")
                     st.rerun()
 
-    st.divider()
+    # ---------------------------------------------------------
+    # TAB 2: AGUARDANDO COLETA
+    # ---------------------------------------------------------
+    with tab_coleta:
+        st.subheader("⏳ Peças Aguardando Coleta para Ir à Oficina")
+        conn = conectar_banco()
+        df_coleta = pd.read_sql_query("SELECT * FROM consertos WHERE status = 'Aguardando Coleta' OR status = 'Em espera de coleta' ORDER BY id DESC", conn)
+        conn.close()
 
-    conn = conectar_banco()
-    df_consertos = pd.read_sql_query("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado' ORDER BY id DESC", conn)
-    conn.close()
-
-    if df_consertos.empty:
-        st.info("Nenhuma peça em conserto ou aguardando coleta no momento.")
-    else:
-        st.write(f"### Peças em Manutenção ({len(df_consertos)})")
-        for idx, row in df_consertos.iterrows():
-            col_img, col_detalhes, col_status = st.columns([1.5, 3, 1.5])
-            
-            with col_img:
-                col_p, col_nf = st.columns(2)
+        if df_coleta.empty:
+            st.info("Nenhuma peça aguardando coleta no momento.")
+        else:
+            for idx, row in df_coleta.iterrows():
+                col_img, col_detalhes, col_acao = st.columns([1.5, 3, 1.5])
                 
-                img_peca = resolver_imagem(row['caminho_foto_peca'])
-                with col_p:
-                    st.caption("📷 Foto Peça")
-                    if img_peca:
-                        st.image(img_peca, use_container_width=True)
-                    else:
-                        st.info("Sem foto cadastrada")
-                
-                img_nf = resolver_imagem(row['caminho_foto_nf'])
-                with col_nf:
-                    st.caption("📄 Foto NF")
-                    if img_nf:
-                        st.image(img_nf, use_container_width=True)
-                    else:
-                        st.info("Sem foto da NF")
+                with col_img:
+                    col_p, col_nf = st.columns(2)
+                    img_peca = resolver_imagem(row['caminho_foto_peca'])
+                    with col_p:
+                        st.caption("📷 Foto Peça")
+                        if img_peca:
+                            st.image(img_peca, use_container_width=True)
+                        else:
+                            st.info("Sem foto")
+                    
+                    img_nf = resolver_imagem(row['caminho_foto_nf'])
+                    with col_nf:
+                        st.caption("📄 Foto NF")
+                        if img_nf:
+                            st.image(img_nf, use_container_width=True)
+                        else:
+                            st.info("Sem foto NF")
 
-            with col_detalhes:
-                st.subheader(f"**{row['item_nome']}**")
-                st.write(f"**Cód. Interno/REF:** {row['cod_ref'] if row['cod_ref'] else 'N/A'}")
-                st.write(f"**Data de Envio:** {row['data_envio']}")
-                st.write(f"**Oficina / Empresa:** {row['oficina']}")
-                st.write(f"**Nº da NF de Remessa:** {row['num_nf']}")
-                st.write(f"**Defeito:** {row['defeito']}")
+                with col_detalhes:
+                    st.subheader(f"**{row['item_nome']}**")
+                    st.write(f"**Cód. Interno/REF:** {row['cod_ref'] if row['cod_ref'] else 'N/A'}")
+                    st.write(f"**Data Cadastro:** {row['data_envio']}")
+                    st.write(f"**Oficina Destino:** {row['oficina']}")
+                    st.write(f"**Nº NF:** {row['num_nf']}")
+                    st.write(f"**Defeito:** {row['defeito']}")
 
-            with col_status:
-                opcoes_status = ["Em Conserto", "Em espera de coleta"]
-                status_atual = row['status'] if row['status'] in opcoes_status else "Em Conserto"
-                
-                novo_status = st.selectbox(
-                    "Status Atual:",
-                    opcoes_status,
-                    index=opcoes_status.index(status_atual),
-                    key=f"status_{row['id']}"
-                )
-                
-                if novo_status != row['status']:
-                    conn = conectar_banco()
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE consertos SET status = ? WHERE id = ?", (novo_status, row['id']))
-                    conn.commit()
-                    conn.close()
-                    st.success("Status atualizado!")
-                    st.rerun()
+                with col_acao:
+                    st.warning("Status: Aguardando Coleta")
+                    if st.button("🚚 Confirmar Coleta (Enviar p/ Manutenção)", key=f"col_{row['id']}"):
+                        conn = conectar_banco()
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE consertos SET status = 'Em Conserto' WHERE id = ?", (row['id'],))
+                        conn.commit()
+                        conn.close()
+                        registrar_historico("COLETADO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
+                        st.success("Coleta confirmada! Peça movida para 'Em Manutenção'.")
+                        st.rerun()
 
-                st.write("---")
-                with st.popover("✅ Registrar Retorno"):
-                    st.write("Confirmar retorno desta peça ao estoque?")
-                    if st.button("Confirmar Retorno ao Estoque", key=f"ret_{row['id']}"):
+                st.divider()
+
+    # ---------------------------------------------------------
+    # TAB 3: EM MANUTENÇÃO
+    # ---------------------------------------------------------
+    with tab_manut:
+        st.subheader("🛠️ Peças em Manutenção na Oficina")
+        conn = conectar_banco()
+        df_manut = pd.read_sql_query("SELECT * FROM consertos WHERE status = 'Em Conserto' OR status IS NULL ORDER BY id DESC", conn)
+        conn.close()
+
+        if df_manut.empty:
+            st.info("Nenhuma peça atualmente em manutenção na oficina.")
+        else:
+            for idx, row in df_manut.iterrows():
+                col_img, col_detalhes, col_acao = st.columns([1.5, 3, 1.5])
+                
+                with col_img:
+                    col_p, col_nf = st.columns(2)
+                    img_peca = resolver_imagem(row['caminho_foto_peca'])
+                    with col_p:
+                        st.caption("📷 Foto Peça")
+                        if img_peca:
+                            st.image(img_peca, use_container_width=True)
+                        else:
+                            st.info("Sem foto")
+                    
+                    img_nf = resolver_imagem(row['caminho_foto_nf'])
+                    with col_nf:
+                        st.caption("📄 Foto NF")
+                        if img_nf:
+                            st.image(img_nf, use_container_width=True)
+                        else:
+                            st.info("Sem foto NF")
+
+                with col_detalhes:
+                    st.subheader(f"**{row['item_nome']}**")
+                    st.write(f"**Cód. Interno/REF:** {row['cod_ref'] if row['cod_ref'] else 'N/A'}")
+                    st.write(f"**Data de Envio:** {row['data_envio']}")
+                    st.write(f"**Oficina / Empresa:** {row['oficina']}")
+                    st.write(f"**Nº NF:** {row['num_nf']}")
+                    st.write(f"**Defeito:** {row['defeito']}")
+
+                with col_acao:
+                    st.info("Status: Em Manutenção")
+                    if st.button("✅ Confirmar Retorno ao Estoque", key=f"ret_{row['id']}"):
                         conn = conectar_banco()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE consertos SET status = 'Retornado' WHERE id = ?", (row['id'],))
@@ -421,7 +466,21 @@ elif menu == "🛠️ Gestão de Consertos":
                         st.success("Retorno registrado com sucesso!")
                         st.rerun()
 
-            st.divider()
+                st.divider()
+
+    # ---------------------------------------------------------
+    # TAB 4: PEÇAS RETORNADAS (HISTÓRICO)
+    # ---------------------------------------------------------
+    with tab_ret:
+        st.subheader("✅ Histórico de Peças Retornadas da Manutenção")
+        conn = conectar_banco()
+        df_ret = pd.read_sql_query("SELECT * FROM consertos WHERE status = 'Retornado' ORDER BY id DESC", conn)
+        conn.close()
+
+        if df_ret.empty:
+            st.info("Nenhum histórico de retorno de peças registrado ainda.")
+        else:
+            st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
 # MÓDULO 3: MOVIMENTAÇÃO DE ESTOQUE
@@ -472,7 +531,7 @@ elif menu == "📦 Movimentação de Estoque":
                     st.rerun()
 
 # =========================================================
-# MÓDULO 4: CADASTRO E EDIÇÃO
+# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
@@ -572,7 +631,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         st.rerun()
 
 # =========================================================
-# MÓDULO 5: HISTÓRICO COM CONSULTA SEGURA
+# MÓDULO 5: HISTÓRICO
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações Gerais")
