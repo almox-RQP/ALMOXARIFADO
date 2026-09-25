@@ -2,6 +2,8 @@ import os
 import re
 import sqlite3
 import glob
+import urllib.parse
+import requests
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
@@ -51,6 +53,33 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
         conn.close()
     except Exception:
         pass
+
+# =========================================================
+# FUNÇÕES DE ROTA E CÁLCULO DE COMBUSTÍVEL
+# =========================================================
+def obter_coordenadas(endereco):
+    try:
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={urllib.parse.quote(endereco)}"
+        headers = {"User-Agent": "RequipelEstoqueApp/1.0"}
+        response = requests.get(url, headers=headers, timeout=5)
+        data = response.json()
+        if data:
+            return float(data[0]['lat']), float(data[0]['lon'])
+    except Exception:
+        pass
+    return None, None
+
+def calcular_distancia_osrm(lat1, lon1, lat2, lon2):
+    try:
+        url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if data.get("routes"):
+            distancia_metros = data["routes"][0]["distance"]
+            return distancia_metros / 1000.0  # Retorna em km
+    except Exception:
+        pass
+    return None
 
 # =========================================================
 # FUNÇÃO RESGATADORA INTELIGENTE DE IMAGENS
@@ -287,6 +316,7 @@ menu = st.sidebar.radio(
     "Navegação do Sistema:",
     [
         "📊 Visão Geral / Dashboard",
+        "🚚 Calculadora de Frete / Rota",
         "🛠️ Gestão de Consertos",
         "📦 Movimentação de Estoque",
         "➕ Cadastrar / Editar Peças",
@@ -374,6 +404,122 @@ if menu == "📊 Visão Geral / Dashboard":
         df_exibir = df_est
 
     st.dataframe(df_exibir, use_container_width=True)
+
+# =========================================================
+# MÓDULO NOVO: CALCULADORA DE FRETE / ROTA E COMBUSTÍVEL
+# =========================================================
+elif menu == "🚚 Calculadora de Frete / Rota":
+    st.title("🚚 Calculadora de Rota, Frete e Combustível")
+    st.caption("Calcule os custos de deslocamento da entrega com base no veículo, distância e itens do estoque.")
+
+    c_esq, c_dir = st.columns([1.2, 1])
+
+    with c_esq:
+        st.subheader("1. Configurações do Percurso")
+        origem = st.text_input("Endereço da Empresa (Origem):", value="Rod. RS-118, 5245 - Gravataí, RS")
+        destino = st.text_input("Endereço de Entrega (Destino):", placeholder="Ex: Av. Brasil, 1000 - Porto Alegre, RS")
+        
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            tipo_percurso = st.radio("Percurso:", ["Somente Ida", "Ida e Volta"], index=1)
+        with col_m2:
+            calc_modo = st.radio("Modo de Distância:", ["Busca Automática (GPS)", "Informar km Manualmente"])
+
+        distancia_final_km = 0.0
+
+        if calc_modo == "Busca Automática (GPS)":
+            if st.button("📍 Calcular Rota pelo Mapa"):
+                if not destino:
+                    st.warning("Informe o endereço de destino!")
+                else:
+                    with st.spinner("Buscando rota e calculando distância..."):
+                        lat1, lon1 = obter_coordenadas(origem)
+                        lat2, lon2 = obter_coordenadas(destino)
+                        if lat1 and lat2:
+                            km_obter = calcular_distancia_osrm(lat1, lon1, lat2, lon2)
+                            if km_obter:
+                                st.session_state["distancia_calculada"] = km_obter
+                                st.success(f"Distância identificada: {km_obter:.2f} km")
+                            else:
+                                st.error("Não foi possível traçar a rota exata. Tente informar a distância manualmente.")
+                        else:
+                            st.error("Endereço não localizado. Tente digitar a distância manualmente.")
+
+            if "distancia_calculada" in st.session_state:
+                distancia_final_km = st.session_state["distancia_calculada"]
+                st.info(f"Distância Base (Só Ida): **{distancia_final_km:.2f} km**")
+        else:
+            distancia_final_km = st.number_input("Distância em km (Só Ida):", min_value=0.0, value=15.0, step=1.0)
+
+        if tipo_percurso == "Ida e Volta":
+            distancia_total_rodada = distancia_final_km * 2
+        else:
+            distancia_total_rodada = distancia_final_km
+
+        st.subheader("2. Dados do Veículo e Combustível")
+        col_v1, col_v2, col_v3 = st.columns(3)
+        with col_v1:
+            veiculo_nome = st.selectbox("Veículo / Modelo:", ["Furgão / Utilitário", "Carro de Passeio", "Caminhão Pequeno", "Outro"])
+        with col_v2:
+            consumo_kml = st.number_input("Consumo (km/L):", min_value=1.0, value=10.0, step=0.5)
+        with col_v3:
+            preco_litro = st.number_input("Gasolina (R$/L):", min_value=1.0, value=5.89, step=0.05)
+
+        st.subheader("3. Adicionais e Peça do Estoque")
+        taxa_extra_km = st.number_input("Taxa de Desgaste / Operação por km (R$):", min_value=0.0, value=0.50, step=0.10)
+        
+        # Selecionar item do estoque para somar no orçamento
+        conn = conectar_banco()
+        df_pecas_frete = pd.read_sql_query("SELECT id, nome, preco FROM estoque WHERE quanti > 0 ORDER BY nome ASC", conn)
+        conn.close()
+
+        valor_peca_selecionada = 0.0
+        nome_peca_selecionada = "Nenhuma"
+
+        if not df_pecas_frete.empty:
+            dict_pecas = {"[Nenhuma peça vinculada]": (0.0, "Nenhuma")}
+            for _, r in df_pecas_frete.iterrows():
+                dict_pecas[f"{r['nome']} - R$ {r['preco']:.2f}"] = (r['preco'], r['nome'])
+            
+            sel_p = st.selectbox("Vincular Peça do Estoque ao Frete:", list(dict_pecas.keys()))
+            valor_peca_selecionada, nome_peca_selecionada = dict_pecas[sel_p]
+
+    with c_dir:
+        st.subheader("📊 Resumo do Orçamento de Entrega")
+
+        if distancia_total_rodada > 0 and consumo_kml > 0:
+            litros_necessarios = distancia_total_rodada / consumo_kml
+            custo_combustivel = litros_necessarios * preco_litro
+            custo_operacional = distancia_total_rodada * taxa_extra_km
+            custo_total_entrega = custo_combustivel + custo_operacional
+            valor_total_geral = custo_total_entrega + valor_peca_selecionada
+
+            st.metric("Litros de Combustível", f"{litros_necessarios:.2f} L")
+            st.metric("Custo Somente Gasolina", f"R$ {custo_combustivel:.2f}")
+            st.metric("Custo Total de Frete (com taxas)", f"R$ {custo_total_entrega:.2f}")
+
+            if valor_peca_selecionada > 0:
+                st.metric("Valor da Peça", f"R$ {valor_peca_selecionada:.2f}")
+                st.divider()
+                st.markdown(f"### 💰 **Total do Orçamento:** R$ {valor_total_geral:.2f}")
+
+            # Gerador de Texto Formatado para Envio
+            texto_orcamento = f"""*ORÇAMENTO DE ENTREGA - REQUIPEL*
+----------------------------------------
+📍 *Origem:* {origem}
+🏁 *Destino:* {destino}
+📏 *Distância Rodada:* {distancia_total_rodada:.1f} km ({tipo_percurso})
+🚘 *Veículo:* {veiculo_nome} ({consumo_kml} km/L)
+
+⛽ *Gasto de Combustível:* R$ {custo_combustivel:.2f}
+🚚 *Taxa de Entrega / Frete:* R$ {custo_total_entrega:.2f}
+📦 *Peça:* {nome_peca_selecionada} (R$ {valor_peca_selecionada:.2f})
+----------------------------------------
+💰 *TOTAL GERAL:* R$ {valor_total_geral:.2f}
+"""
+            st.text_area("📋 Texto Formatado para WhatsApp / Cliente:", value=texto_orcamento, height=220)
+        else:
+            st.info("Informe a distância para gerar o cálculo exato do frete.")
 
 # =========================================================
 # MÓDULO 2: GESTÃO DE CONSERTOS
@@ -571,7 +717,6 @@ elif menu == "📦 Movimentação de Estoque":
     if df_estoque.empty:
         st.warning("Nenhum material cadastrado para movimentar.")
     else:
-        # Busca em tempo real por Nome, Código Interno ou REF
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
         df_filtrado = df_estoque.copy()
@@ -585,7 +730,6 @@ elif menu == "📦 Movimentação de Estoque":
         if df_filtrado.empty:
             st.error("Nenhuma peça encontrada com o termo pesquisado.")
         else:
-            # Rótulo ultra explicativo mostrando todos os identificadores no dropdown
             opcoes_mat = {
                 f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (Qtd: {row['quanti']}) - ID #{row['id']}": row['id'] 
                 for idx, row in df_filtrado.iterrows()
@@ -687,14 +831,13 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     finally:
                         conn.close()
 
-    # SUB-ABA 2: EDIÇÃO ESTRITAMENTE INDIVIDUAL POR ID E FILTRO
+    # SUB-ABA 2: EDIÇÃO INDIVIDUAL POR ID E FILTRO
     with tab_edit:
         conn = conectar_banco()
         df_edit = pd.read_sql_query("SELECT * FROM estoque ORDER BY nome ASC", conn)
         conn.close()
 
         if not df_edit.empty:
-            # Campo de busca para filtrar a peça desejada
             busca_edit = st.text_input("🔍 Pesquisar Peça para Edição por Nome, Código Interno ou REF:")
             
             df_edit_filtrado = df_edit.copy()
@@ -708,7 +851,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
             if df_edit_filtrado.empty:
                 st.warning("Nenhuma peça encontrada com os dados informados.")
             else:
-                # Mapeamento com Nome, Cód Interno, REF e ID para diferenciar peças de mesmo nome
                 opcoes_materiais = {
                     f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} | NCM: {row['ncm']} (ID #{row['id']})": row['id'] 
                     for _, row in df_edit_filtrado.iterrows()
@@ -716,7 +858,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
                 mat_selecionado = st.selectbox("Selecione a peça exata para Editar:", list(opcoes_materiais.keys()))
                 id_material = opcoes_materiais[mat_selecionado]
                 
-                # Dados exclusivos da peça selecionada
                 row_e = df_edit[df_edit['id'] == id_material].iloc[0]
 
                 with st.form(f"form_edicao_{id_material}"):
@@ -745,51 +886,43 @@ elif menu == "➕ Cadastrar / Editar Peças":
                                 UPDATE estoque 
                                 SET nome=?, cod=?, cod_ref=?, ncm=?, estante=?, prateleira=?, caixa=?, quanti=?, preco=?
                                 WHERE id=?
-                            """, (enome, ecod, eref, encm.strip(), eestante, eprat, ecaixa, eqtd, epreco, id_material))
+                            """, (enome, ecod, eref, encm, eestante, eprat, ecaixa, eqtd, epreco, id_material))
                             conn.commit()
                             conn.close()
-                            st.success(f"Alterações na peça '{enome}' (ID #{id_material}) salvas com sucesso!")
+                            registrar_historico("EDICAO", enome, eqtd, f"ID #{id_material} modificado")
+                            st.success("Peça atualizada com sucesso!")
                             st.rerun()
 
-                if st.button(f"❌ Excluir Apenas '{row_e['nome']}' (ID #{id_material}) do Estoque", key=f"del_est_{id_material}"):
-                    conn = conectar_banco()
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM estoque WHERE id = ?", (id_material,))
-                    conn.commit()
-                    conn.close()
-                    registrar_historico("EXCLUSAO_ESTOQUE", row_e['nome'], 0)
-                    st.success("Material removido do estoque!")
-                    st.rerun()
-
 # =========================================================
-# MÓDULO 5: HISTÓRICO
+# MÓDULO 5: HISTÓRICO (LOGS)
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
-    st.title("📜 Histórico de Movimentações Gerais")
-
+    st.title("📜 Histórico de Movimentações e Logs")
     conn = conectar_banco()
-    try:
-        df_hist = pd.read_sql_query(
-            "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade, observacao AS Observação, usuario AS Usuário FROM historico ORDER BY id DESC",
-            conn
-        )
-    except Exception:
-        df_hist = pd.read_sql_query(
-            "SELECT data_hora AS 'Data e Hora', tipo AS 'Tipo Ação', item_nome AS Item, quantidade AS Quantidade FROM historico ORDER BY id DESC",
-            conn
-        )
+    df_hist = pd.read_sql_query("SELECT * FROM historico ORDER BY id DESC", conn)
     conn.close()
 
-    st.dataframe(df_hist, use_container_width=True)
+    if df_hist.empty:
+        st.info("Nenhuma movimentação registrada no histórico.")
+    else:
+        st.dataframe(df_hist, use_container_width=True)
 
 # =========================================================
-# MÓDULO 6: CONSULTA NCM
+# MÓDULO 6: CONSULTA RÁPIDA NCM
 # =========================================================
 elif menu == "🔍 Consulta Rápida NCM":
-    st.title("🔍 Consulta Rápida de NCMs no Estoque")
+    st.title("🔍 Consulta Rápida NCM")
+    st.caption("Verifique as NCMs cadastradas na base do sistema.")
     
     conn = conectar_banco()
-    df_ncm = pd.read_sql_query("SELECT cod AS Código, cod_ref AS 'Cód. REF', nome AS Material, ncm AS NCM, estante AS Estante FROM estoque", conn)
+    df_ncm = pd.read_sql_query("SELECT DISTINCT ncm, nome, cod_ref FROM estoque ORDER BY ncm ASC", conn)
     conn.close()
+
+    termo_ncm = st.text_input("Digite o número do NCM ou nome da peça:")
+    if termo_ncm:
+        df_ncm = df_ncm[
+            df_ncm['ncm'].astype(str).str.contains(termo_ncm, case=False, na=False) |
+            df_ncm['nome'].astype(str).str.contains(termo_ncm, case=False, na=False)
+        ]
 
     st.dataframe(df_ncm, use_container_width=True)
