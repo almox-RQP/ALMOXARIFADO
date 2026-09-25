@@ -55,16 +55,27 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
         pass
 
 # =========================================================
-# FUNÇÕES DE ROTA E CÁLCULO DE COMBUSTÍVEL
+# FUNÇÕES DE ROTA E CÁLCULO DE COMBUSTÍVEL (MELHORADAS)
 # =========================================================
 def obter_coordenadas(endereco):
     try:
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={urllib.parse.quote(endereco)}"
-        headers = {"User-Agent": "RequipelEstoqueApp/1.0"}
-        response = requests.get(url, headers=headers, timeout=5)
+        txt_limpo = endereco.strip()
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={urllib.parse.quote(txt_limpo)}&limit=1"
+        headers = {"User-Agent": "RequipelEstoqueApp/2.0 (contato@requipel.com.br)"}
+        response = requests.get(url, headers=headers, timeout=6)
         data = response.json()
+        
         if data:
             return float(data[0]['lat']), float(data[0]['lon'])
+        
+        # Fallback: busca por rua e cidade
+        partes = txt_limpo.split(',')
+        if len(partes) > 1:
+            busca_simplificada = f"{partes[0]}, Gravataí, RS"
+            url2 = f"https://nominatim.openstreetmap.org/search?format=json&q={urllib.parse.quote(busca_simplificada)}&limit=1"
+            res2 = requests.get(url2, headers=headers, timeout=6).json()
+            if res2:
+                return float(res2[0]['lat']), float(res2[0]['lon'])
     except Exception:
         pass
     return None, None
@@ -76,7 +87,7 @@ def calcular_distancia_osrm(lat1, lon1, lat2, lon2):
         data = response.json()
         if data.get("routes"):
             distancia_metros = data["routes"][0]["distance"]
-            return distancia_metros / 1000.0  # Retorna em km
+            return distancia_metros / 1000.0
     except Exception:
         pass
     return None
@@ -406,55 +417,54 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO NOVO: CALCULADORA DE FRETE / ROTA E COMBUSTÍVEL
+# MÓDULO: CALCULADORA DE FRETE / ROTA E COMBUSTÍVEL
 # =========================================================
 elif menu == "🚚 Calculadora de Frete / Rota":
     st.title("🚚 Calculadora de Rota, Frete e Combustível")
     st.caption("Calcule os custos de deslocamento da entrega com base no veículo, distância e itens do estoque.")
 
+    if "distancia_km_gps" not in st.session_state:
+        st.session_state["distancia_km_gps"] = 0.0
+
     c_esq, c_dir = st.columns([1.2, 1])
 
     with c_esq:
         st.subheader("1. Configurações do Percurso")
-        origem = st.text_input("Endereço da Empresa (Origem):", value="Rod. RS-118, 5245 - Gravataí, RS")
-        destino = st.text_input("Endereço de Entrega (Destino):", placeholder="Ex: Av. Brasil, 1000 - Porto Alegre, RS")
+        origem = st.text_input("Endereço da Empresa (Origem):", value="Rod. RS-118, 5245, Gravataí - RS")
+        destino = st.text_input("Endereço de Entrega (Destino):", value="Rua Sarandi, 120, Parque Ipiranga, Gravataí - RS")
         
         col_m1, col_m2 = st.columns(2)
         with col_m1:
             tipo_percurso = st.radio("Percurso:", ["Somente Ida", "Ida e Volta"], index=1)
         with col_m2:
-            calc_modo = st.radio("Modo de Distância:", ["Busca Automática (GPS)", "Informar km Manualmente"])
-
-        distancia_final_km = 0.0
+            calc_modo = st.radio("Modo de Distância:", ["Busca Automática (GPS)", "Informar km Manualmente"], index=0)
 
         if calc_modo == "Busca Automática (GPS)":
             if st.button("📍 Calcular Rota pelo Mapa"):
                 if not destino:
                     st.warning("Informe o endereço de destino!")
                 else:
-                    with st.spinner("Buscando rota e calculando distância..."):
+                    with st.spinner("Buscando coordenadas no mapa..."):
                         lat1, lon1 = obter_coordenadas(origem)
                         lat2, lon2 = obter_coordenadas(destino)
+                        
                         if lat1 and lat2:
-                            km_obter = calcular_distancia_osrm(lat1, lon1, lat2, lon2)
-                            if km_obter:
-                                st.session_state["distancia_calculada"] = km_obter
-                                st.success(f"Distância identificada: {km_obter:.2f} km")
+                            km = calcular_distancia_osrm(lat1, lon1, lat2, lon2)
+                            if km:
+                                st.session_state["distancia_km_gps"] = km
+                                st.success(f"Rota calculada com sucesso: {km:.2f} km (Só Ida)")
                             else:
-                                st.error("Não foi possível traçar a rota exata. Tente informar a distância manualmente.")
+                                st.error("Não foi possível traçar o trajeto entre os pontos.")
                         else:
-                            st.error("Endereço não localizado. Tente digitar a distância manualmente.")
+                            st.error("Endereço não localizado pelo GPS. Verifique a grafia ou mude para 'Informar km Manualmente'.")
 
-            if "distancia_calculada" in st.session_state:
-                distancia_final_km = st.session_state["distancia_calculada"]
-                st.info(f"Distância Base (Só Ida): **{distancia_final_km:.2f} km**")
+            distancia_final_km = st.session_state["distancia_km_gps"]
+            if distancia_final_km > 0:
+                st.info(f"Distância identificada pelo GPS (Só Ida): **{distancia_final_km:.2f} km**")
         else:
-            distancia_final_km = st.number_input("Distância em km (Só Ida):", min_value=0.0, value=15.0, step=1.0)
+            distancia_final_km = st.number_input("Distância em km (Só Ida):", min_value=0.0, value=6.0, step=0.5)
 
-        if tipo_percurso == "Ida e Volta":
-            distancia_total_rodada = distancia_final_km * 2
-        else:
-            distancia_total_rodada = distancia_final_km
+        distancia_total_rodada = distancia_final_km * 2 if tipo_percurso == "Ida e Volta" else distancia_final_km
 
         st.subheader("2. Dados do Veículo e Combustível")
         col_v1, col_v2, col_v3 = st.columns(3)
@@ -468,7 +478,6 @@ elif menu == "🚚 Calculadora de Frete / Rota":
         st.subheader("3. Adicionais e Peça do Estoque")
         taxa_extra_km = st.number_input("Taxa de Desgaste / Operação por km (R$):", min_value=0.0, value=0.50, step=0.10)
         
-        # Selecionar item do estoque para somar no orçamento
         conn = conectar_banco()
         df_pecas_frete = pd.read_sql_query("SELECT id, nome, preco FROM estoque WHERE quanti > 0 ORDER BY nome ASC", conn)
         conn.close()
@@ -494,6 +503,7 @@ elif menu == "🚚 Calculadora de Frete / Rota":
             custo_total_entrega = custo_combustivel + custo_operacional
             valor_total_geral = custo_total_entrega + valor_peca_selecionada
 
+            st.metric("Distância Total Considerada", f"{distancia_total_rodada:.2f} km")
             st.metric("Litros de Combustível", f"{litros_necessarios:.2f} L")
             st.metric("Custo Somente Gasolina", f"R$ {custo_combustivel:.2f}")
             st.metric("Custo Total de Frete (com taxas)", f"R$ {custo_total_entrega:.2f}")
@@ -503,7 +513,6 @@ elif menu == "🚚 Calculadora de Frete / Rota":
                 st.divider()
                 st.markdown(f"### 💰 **Total do Orçamento:** R$ {valor_total_geral:.2f}")
 
-            # Gerador de Texto Formatado para Envio
             texto_orcamento = f"""*ORÇAMENTO DE ENTREGA - REQUIPEL*
 ----------------------------------------
 📍 *Origem:* {origem}
@@ -519,7 +528,7 @@ elif menu == "🚚 Calculadora de Frete / Rota":
 """
             st.text_area("📋 Texto Formatado para WhatsApp / Cliente:", value=texto_orcamento, height=220)
         else:
-            st.info("Informe a distância para gerar o cálculo exato do frete.")
+            st.info("Clique no botão '📍 Calcular Rota pelo Mapa' para obter a distância real do percurso.")
 
 # =========================================================
 # MÓDULO 2: GESTÃO DE CONSERTOS
