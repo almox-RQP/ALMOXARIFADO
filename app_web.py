@@ -92,7 +92,7 @@ def excluir_conserto(id_conserto):
     return False
 
 # =========================================================
-# 2. INICIALIZAÇÃO DAS TABELAS NO SUPABASE / POSTGRES
+# 2. INICIALIZAÇÃO E MIGRAÇÃO DAS TABELAS NO SUPABASE
 # =========================================================
 def inicializar_banco():
     engine = obter_engine()
@@ -119,8 +119,14 @@ def inicializar_banco():
                 prateleira TEXT,
                 caixa TEXT,
                 quanti INTEGER DEFAULT 0,
-                preco REAL DEFAULT 0.0
+                preco REAL DEFAULT 0.0,
+                critico BOOLEAN DEFAULT FALSE
             )
+        """))
+
+        # Migração automática: garante que a coluna 'critico' exista
+        conn.execute(text("""
+            ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
 
         conn.execute(text("""
@@ -239,7 +245,14 @@ if menu == "📊 Visão Geral / Dashboard":
     df_est = pd.read_sql("SELECT * FROM estoque", engine)
     df_cons = pd.read_sql("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado'", engine)
 
-    m1, m2, m3, m4 = st.columns(4)
+    # Identifica itens críticos zerados
+    df_criticos_zerados = pd.DataFrame()
+    qtd_criticos_zerados = 0
+    if not df_est.empty and 'critico' in df_est.columns:
+        df_criticos_zerados = df_est[(df_est['critico'] == True) & (df_est['quanti'] == 0)]
+        qtd_criticos_zerados = len(df_criticos_zerados)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total de Itens Cadastrados", len(df_est))
     m2.metric("Peças em Conserto / Coleta", len(df_cons))
     
@@ -248,6 +261,17 @@ if menu == "📊 Visão Geral / Dashboard":
     
     valor_total = (df_est['quanti'] * df_est['preco']).sum() if not df_est.empty and 'preco' in df_est.columns else 0.0
     m4.metric("Valor do Estoque (R$)", f"R$ {valor_total:,.2f}")
+
+    m5.metric("🚨 Itens Críticos Zerados", qtd_criticos_zerados)
+
+    # Painel de alerta para itens críticos com estoque zero
+    if not df_criticos_zerados.empty:
+        st.error(f"⚠️ **ALERTA DE REPOSIÇÃO URGENTE:** Há {qtd_criticos_zerados} item(ns) marcado(s) como CRÍTICO com quantidade ZERO em estoque!")
+        st.dataframe(
+            df_criticos_zerados[['nome', 'cod', 'cod_ref', 'estante', 'prateleira', 'caixa']],
+            use_container_width=True,
+            hide_index=True
+        )
 
     st.divider()
 
@@ -548,6 +572,8 @@ elif menu == "➕ Cadastrar / Editar Peças":
                 prateleira = st.text_input("Prateleira:")
                 caixa = st.text_input("Caixa / Posição:")
                 qtd = st.number_input("Quantidade Inicial:", min_value=0, step=1)
+            
+            is_critico = st.checkbox("⚠️ Item Crítico (Prioridade Alta / Alerta de Reposição)")
 
             btn_salvar = st.form_submit_button("💾 SALVAR E CADASTRAR OUTRO")
 
@@ -562,14 +588,14 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     engine = obter_engine()
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco)
-                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco)
+                            INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
+                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
                         """), {
                             "nome": nome, "cod": cod, "ref": ref, "ncm": ncm.strip(),
                             "estante": estante, "prateleira": prateleira, "caixa": caixa,
-                            "quanti": qtd, "preco": preco
+                            "quanti": qtd, "preco": preco, "critico": is_critico
                         })
-                    registrar_historico("CADASTRO", nome, qtd)
+                    registrar_historico("CADASTRO", nome, qtd, f"Crítico: {'Sim' if is_critico else 'Não'}")
                     st.success(f"Material '{nome}' cadastrado no Supabase!")
 
     # SUB-ABA 2: EDIÇÃO INDIVIDUAL POR ID E FILTRO
@@ -615,6 +641,10 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         ecaixa = st.text_input("Caixa", value=str(row_e['caixa']) if row_e['caixa'] else "")
                         eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
 
+                    # Obtém valor atual do campo crítico (trata valores ausentes/nulos)
+                    val_critico = bool(row_e['critico']) if 'critico' in row_e and pd.notna(row_e['critico']) else False
+                    ecritico = st.checkbox("⚠️ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
+
                     b_edit = st.form_submit_button("💾 Salvar Alterações Apenas Nesta Peça")
                     if b_edit:
                         if not validar_ncm(encm):
@@ -623,14 +653,14 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             with engine.begin() as conn:
                                 conn.execute(text("""
                                     UPDATE estoque 
-                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco
+                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
                                     WHERE id=:id
                                 """), {
                                     "nome": enome, "cod": ecod, "ref": eref, "ncm": encm,
                                     "est": eestante, "prat": eprat, "caixa": ecaixa,
-                                    "qtd": eqtd, "preco": epreco, "id": id_material
+                                    "qtd": eqtd, "preco": epreco, "critico": ecritico, "id": id_material
                                 })
-                            registrar_historico("EDICAO", enome, eqtd, f"ID #{id_material} modificado")
+                            registrar_historico("EDICAO", enome, eqtd, f"ID #{id_material} modificado. Crítico: {'Sim' if ecritico else 'Não'}")
                             st.success("Peça atualizada no banco em nuvem!")
                             st.rerun()
 
