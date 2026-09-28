@@ -1,11 +1,18 @@
 import os
 import re
+import io
 import requests
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+# Bibliotecas para geração de PDF
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 # =========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -50,6 +57,87 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
             })
     except Exception:
         pass
+
+# Funcao auxiliar para gerar o PDF formatado de Solicitacao de Compras
+def gerar_pdf_compras(df_itens):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+
+    # Estilos customizados
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        leading=20,
+        alignment=1, # Centralizado
+        textColor=colors.HexColor("#1E3A8A")
+    )
+    
+    sub_style = ParagraphStyle(
+        'DocSub',
+        parent=styles['Normal'],
+        fontSize=10,
+        leading=12,
+        alignment=1,
+        textColor=colors.gray
+    )
+
+    body_style = ParagraphStyle(
+        'TableBody',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=11
+    )
+
+    # Cabeçalho do Documento
+    story.append(Paragraph("<b>REQUI PEL - SOLICITAÇÃO DE COMPRAS DE ESTOQUE</b>", title_style))
+    story.append(Spacer(1, 4))
+    data_str = datetime.now().strftime("%d/%m/%Y - %H:%M")
+    solicitante = st.session_state.get('usuario_logado', 'Almoxarifado')
+    story.append(Paragraph(f"Data de Emissão: {data_str} | Solicitante: {solicitante}", sub_style))
+    story.append(Spacer(1, 15))
+
+    # Tabela de Itens
+    dados_tabela = [["Código / REF", "Descrição da Peça / Material", "NCM", "Est. Atual", "Status/Crítico"]]
+    
+    for _, row in df_itens.iterrows():
+        cod_ref_str = f"Cód: {row['cod'] if row['cod'] else 'N/A'}\nREF: {row['cod_ref'] if row['cod_ref'] else 'N/A'}"
+        nome_str = str(row['nome'])
+        ncm_str = str(row['ncm']) if row['ncm'] else 'N/A'
+        qtd_str = str(int(row['quanti']))
+        critico_str = "🚨 CRÍTICO" if row['critico'] else "⚠️ Baixo Estoque"
+
+        dados_tabela.append([
+            Paragraph(cod_ref_str, body_style),
+            Paragraph(nome_str, body_style),
+            Paragraph(ncm_str, body_style),
+            Paragraph(qtd_str, body_style),
+            Paragraph(critico_str, body_style)
+        ])
+
+    tabela = Table(dados_tabela, colWidths=[100, 240, 75, 55, 80])
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#F9FAFB")),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    
+    story.append(tabela)
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("<b>Observações para o Setor de Compras:</b> Documento gerado automaticamente pelo Sistema de Estoque Requipel.", sub_style))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 # =========================================================
 # UPLOAD DE IMAGENS DIRETO PARA O SUPABASE STORAGE
@@ -124,7 +212,6 @@ def inicializar_banco():
             )
         """))
 
-        # Migração automática
         conn.execute(text("""
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
@@ -499,7 +586,7 @@ elif menu == "📦 Movimentação de Estoque":
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenum material cadastrado para movimentar.")
+        st.warning("Nenhum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -548,7 +635,7 @@ elif menu == "📦 Movimentação de Estoque":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 4: PEÇAS CRÍTICAS E POUCO ESTOQUE
+# MÓDULO 4: PEÇAS CRÍTICAS E POUCO ESTOQUE (COM BOTÃO DE DOWNLOAD PDF/EXCEL)
 # =========================================================
 elif menu == "🚨 Peças Críticas e Pouco Estoque":
     st.title("🚨 Monitoramento de Peças Importantes e Baixo Estoque")
@@ -581,6 +668,31 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
             df_resultado = df_bc
 
         st.metric("Total de Peças Encontradas na Consulta", len(df_resultado))
+        
+        # --- BOTAO DE DOWNLOAD PARA COMPRAS ---
+        if not df_resultado.empty:
+            c_btn1, c_btn2 = st.columns(2)
+            
+            # Gerar arquivo PDF
+            pdf_bytes = gerar_pdf_compras(df_resultado)
+            with c_btn1:
+                st.download_button(
+                    label="📄 Baixar Documento de Compras (PDF)",
+                    data=pdf_bytes,
+                    file_name=f"solicitacao_compras_{datetime.now().strftime('%d_%m_%Y')}.pdf",
+                    mime="application/pdf"
+                )
+
+            # Gerar arquivo Excel/CSV
+            csv_data = df_resultado.to_csv(index=False).encode('utf-8-sig')
+            with c_btn2:
+                st.download_button(
+                    label="📊 Baixar Tabela em Excel (CSV)",
+                    data=csv_data,
+                    file_name=f"lista_compras_{datetime.now().strftime('%d_%m_%Y')}.csv",
+                    mime="text/csv"
+                )
+
         st.divider()
 
         if df_resultado.empty:
