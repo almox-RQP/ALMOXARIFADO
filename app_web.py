@@ -179,6 +179,58 @@ def excluir_conserto(id_conserto):
             return True
     return False
 
+# Dados do Inventário do Excel para Carga Inicial Automática (Sem marca)
+DADOS_EXCEL_INICIAL = [
+    (1, "Manômetro pressão"),
+    (2, "Medidor de pressão"),
+    (3, "Medidor de distância"),
+    (4, "Regulador de argônio"),
+    (5, "Terminais e adaptadores"),
+    (6, "Pneumática vermelha"),
+    (7, "Pneumática amarela"),
+    (8, "Alicate hidráulico"),
+    (9, "Pistola de ponto vermelha"),
+    (10, "Pistola de ponto preta"),
+    (11, "Paquímetro digital"),
+    (12, "Paquímetro normal"),
+    (13, "Flangeador"),
+    (14, "Medidor com base"),
+    (15, "Hand set zapi c/ cabos"),
+    (16, "Hand set curtis c/ cabos"),
+    (17, "Hand set voltex c/ cabos"),
+    (18, "Notebook"),
+    (20, "Tirador de solda"),
+    (21, "Ferro de solda"),
+    (22, "Torquímetro laranja"),
+    (23, "Torquímetro preto"),
+    (24, "Extrator pequeno"),
+    (25, "Saca filtro"),
+    (26, "Alicate amperímetro"),
+    (27, "Torquesa"),
+    (28, "Extrator grande"),
+    (29, "Cabo de bateria / carregar"),
+    (30, "Engates rápido mandril"),
+    (31, "Jogo de retífica"),
+    (32, "Furadeira impacto"),
+    (33, "Furadeira impacto"),
+    (34, "Lixadeira"),
+    (35, "Jogo de cachimbo pesada"),
+    (36, "Manômetro"),
+    (37, "Manômetro hidráulico"),
+    (38, "Lava jato"),
+    (39, "Carregador de bateria"),
+    (40, "Solda caneta"),
+    (40, "Lixadeira grande"),
+    (41, "SCHWEERS"),
+    (42, "SCHWEERS MENOR"),
+    (43, "Bico de encher pneu"),
+    (44, "Saca filtro"),
+    (45, "Compressor amarelo"),
+    (46, "Vela / Tela fibra de vidro 50 metros"),
+    (47, "Lupa"),
+    (48, "Talha")
+]
+
 # =========================================================
 # 2. INICIALIZAÇÃO E MIGRAÇÃO DAS TABELAS NO SUPABASE
 # =========================================================
@@ -228,6 +280,18 @@ def inicializar_banco():
                 caminho_foto_peca TEXT,
                 caminho_foto_nf TEXT,
                 status TEXT DEFAULT 'Aguardando Coleta'
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ferramentas_especiais (
+                id SERIAL PRIMARY KEY,
+                numero INTEGER,
+                ferramenta TEXT NOT NULL,
+                status TEXT DEFAULT 'DISPONIVEL',
+                responsavel TEXT,
+                data_retirada TEXT,
+                historico_devolucao TEXT
             )
         """))
 
@@ -314,6 +378,7 @@ menu = st.sidebar.radio(
     "Navegação do Sistema:",
     [
         "📊 Visão Geral / Dashboard",
+        "🧰 Ferramentas Especiais",
         "🛠️ Gestão de Consertos",
         "📦 Movimentação de Estoque",
         "🚨 Peças Críticas e Pouco Estoque",
@@ -418,7 +483,119 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: GESTÃO DE CONSERTOS
+# MÓDULO 2: FERRAMENTAS ESPECIAIS (SEM MARCA)
+# =========================================================
+elif menu == "🧰 Ferramentas Especiais":
+    st.title("🧰 Controle de Inventário de Ferramentas Especiais")
+    st.caption("Acompanhe e controle a retirada e devolução de ferramentas especiais por colaborador.")
+
+    engine = obter_engine()
+    df_ferr = pd.read_sql("SELECT * FROM ferramentas_especiais ORDER BY numero ASC, id ASC", engine)
+
+    # Caso a tabela esteja vazia, oferece botão para carregar dados do Excel
+    if df_ferr.empty:
+        st.warning("Nenhuma ferramenta cadastrada no banco de dados.")
+        if st.button("📥 Importar Lista Automática de Ferramentas (Tabela Excel)"):
+            with engine.begin() as conn:
+                for num, fer in DADOS_EXCEL_INICIAL:
+                    conn.execute(text("""
+                        INSERT INTO ferramentas_especiais (numero, ferramenta, status)
+                        VALUES (:num, :fer, 'DISPONIVEL')
+                    """), {"num": num, "fer": fer})
+            st.success("Lista de Ferramentas cadastrada com sucesso!")
+            st.rerun()
+    else:
+        # Métricas no Topo
+        total_f = len(df_ferr)
+        em_uso_f = len(df_ferr[df_ferr['status'] == 'EM_USO'])
+        disp_f = total_f - em_uso_f
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Total de Ferramentas", total_f)
+        mc2.metric("✅ Disponíveis no Estoque", disp_f)
+        mc3.metric("🔴 Empréstimos Ativos (Fora)", em_uso_f)
+
+        st.divider()
+
+        # Filtros e Busca
+        f_col1, f_col2 = st.columns([2, 1])
+        with f_col1:
+            busca_f = st.text_input("🔍 Pesquisar Ferramenta por Nome ou Nº:")
+        with f_col2:
+            filtro_status = st.selectbox("Filtrar por Status:", ["Todas", "Apenas Disponíveis", "Apenas Em Uso (Retiradas)"])
+
+        df_exib = df_ferr.copy()
+        
+        if busca_f:
+            df_exib = df_exib[
+                df_exib['ferramenta'].astype(str).str.contains(busca_f, case=False, na=False) |
+                df_exib['numero'].astype(str).str.contains(busca_f, case=False, na=False)
+            ]
+        
+        if filtro_status == "Apenas Disponíveis":
+            df_exib = df_exib[df_exib['status'] == 'DISPONIVEL']
+        elif filtro_status == "Apenas Em Uso (Retiradas)":
+            df_exib = df_exib[df_exib['status'] == 'EM_USO']
+
+        st.markdown("### 📋 Caixinhas de Ferramentas")
+
+        if df_exib.empty:
+            st.info("Nenhuma ferramenta encontrada para a busca.")
+        else:
+            # Exibe as caixinhas em um Grid de 3 Colunas
+            cols = st.columns(3)
+            for idx, (_, row) in enumerate(df_exib.iterrows()):
+                col_atual = cols[idx % 3]
+                
+                with col_atual:
+                    status_is_uso = (row['status'] == 'EM_USO')
+                    
+                    with st.container(border=True):
+                        st.subheader(f"#{row['numero']} - {row['ferramenta']}")
+
+                        if status_is_uso:
+                            st.error("🔴 **FORA DE ESTOQUE (EM USO)**")
+                            st.markdown(f"👤 **Com:** `{row['responsavel']}`")
+                            st.markdown(f"🕒 **Retirado em:** {row['data_retirada']}")
+                            
+                            dev_por = st.text_input("Quem devolveu?", key=f"dev_usr_{row['id']}", placeholder="Nome do responsável")
+                            if st.button("📥 Registrar Devolução", key=f"btn_dev_{row['id']}", type="primary"):
+                                nome_dev = dev_por.strip() if dev_por else row['responsavel']
+                                dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                obs_hist = f"Devolvido por: {nome_dev} em {dt_agora}"
+                                
+                                with engine.begin() as conn:
+                                    conn.execute(text("""
+                                        UPDATE ferramentas_especiais 
+                                        SET status='DISPONIVEL', responsavel=NULL, data_retirada=NULL, historico_devolucao=:hist
+                                        WHERE id=:id
+                                    """), {"hist": obs_hist, "id": row['id']})
+                                
+                                registrar_historico("DEVOLUCAO_FERRAMENTA", row['ferramenta'], 1, f"Devolvido por: {nome_dev}")
+                                st.success(f"Devolução de #{row['numero']} registrada!")
+                                st.rerun()
+
+                        else:
+                            st.success("✅ **DISPONÍVEL NO ESTOQUE**")
+                            usr_pegou = st.text_input("Quem está pegando?", key=f"peg_usr_{row['id']}", placeholder="Nome de quem retirou")
+                            if st.button("📤 Registrar Saída", key=f"btn_saida_{row['id']}"):
+                                if not usr_pegou:
+                                    st.warning("Informe o nome de quem está retirando a ferramenta!")
+                                else:
+                                    dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                    with engine.begin() as conn:
+                                        conn.execute(text("""
+                                            UPDATE ferramentas_especiais 
+                                            SET status='EM_USO', responsavel=:resp, data_retirada=:dt
+                                            WHERE id=:id
+                                        """), {"resp": usr_pegou.strip(), "dt": dt_agora, "id": row['id']})
+                                    
+                                    registrar_historico("RETIRADA_FERRAMENTA", row['ferramenta'], 1, f"Retirado por: {usr_pegou.strip()}")
+                                    st.success(f"Empréstimo para {usr_pegou.strip()} registrado!")
+                                    st.rerun()
+
+# =========================================================
+# MÓDULO 3: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠️ Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -577,7 +754,7 @@ elif menu == "🛠️ Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 3: MOVIMENTAÇÃO DE ESTOQUE
+# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
@@ -635,7 +812,7 @@ elif menu == "📦 Movimentação de Estoque":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 4: PEÇAS CRÍTICAS E POUCO ESTOQUE (COM BOTÃO DE DOWNLOAD PDF/EXCEL)
+# MÓDULO 5: PEÇAS CRÍTICAS E POUCO ESTOQUE (COM BOTÃO DE DOWNLOAD PDF/EXCEL)
 # =========================================================
 elif menu == "🚨 Peças Críticas e Pouco Estoque":
     st.title("🚨 Monitoramento de Peças Importantes e Baixo Estoque")
@@ -705,7 +882,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
             )
 
 # =========================================================
-# MÓDULO 5: CADASTRO E EDIÇÃO DE PEÇAS
+# MÓDULO 6: CADASTRO E EDIÇÃO DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
@@ -819,7 +996,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 6: HISTÓRICO (LOGS)
+# MÓDULO 7: HISTÓRICO (LOGS)
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações e Logs")
