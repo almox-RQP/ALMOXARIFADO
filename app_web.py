@@ -124,7 +124,7 @@ def inicializar_banco():
             )
         """))
 
-        # Migração automática: garante que a coluna 'critico' exista
+        # Migração automática
         conn.execute(text("""
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
@@ -229,9 +229,9 @@ menu = st.sidebar.radio(
         "📊 Visão Geral / Dashboard",
         "🛠️ Gestão de Consertos",
         "📦 Movimentação de Estoque",
+        "🚨 Peças Críticas e Pouco Estoque",
         "➕ Cadastrar / Editar Peças",
-        "📜 Histórico (Logs)",
-        "🔍 Consulta Rápida NCM"
+        "📜 Histórico (Logs)"
     ]
 )
 
@@ -245,7 +245,6 @@ if menu == "📊 Visão Geral / Dashboard":
     df_est = pd.read_sql("SELECT * FROM estoque", engine)
     df_cons = pd.read_sql("SELECT * FROM consertos WHERE status IS NULL OR status != 'Retornado'", engine)
 
-    # Identifica itens críticos zerados
     df_criticos_zerados = pd.DataFrame()
     qtd_criticos_zerados = 0
     if not df_est.empty and 'critico' in df_est.columns:
@@ -264,7 +263,6 @@ if menu == "📊 Visão Geral / Dashboard":
 
     m5.metric("🚨 Itens Críticos Zerados", qtd_criticos_zerados)
 
-    # Painel de alerta para itens críticos com estoque zero
     if not df_criticos_zerados.empty:
         st.error(f"⚠️ **ALERTA DE REPOSIÇÃO URGENTE:** Há {qtd_criticos_zerados} item(ns) marcado(s) como CRÍTICO com quantidade ZERO em estoque!")
         st.dataframe(
@@ -501,7 +499,7 @@ elif menu == "📦 Movimentação de Estoque":
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenhum material cadastrado para movimentar.")
+        st.warning("Nenum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -550,7 +548,52 @@ elif menu == "📦 Movimentação de Estoque":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 4: CADASTRO E EDIÇÃO DE PEÇAS
+# MÓDULO 4: PEÇAS CRÍTICAS E POUCO ESTOQUE
+# =========================================================
+elif menu == "🚨 Peças Críticas e Pouco Estoque":
+    st.title("🚨 Monitoramento de Peças Importantes e Baixo Estoque")
+    st.caption("Acompanhe peças marcadas como prioritárias ou com nível de saldo abaixo do limite de segurança.")
+    
+    engine = obter_engine()
+    df_bc = pd.read_sql("SELECT * FROM estoque ORDER BY quanti ASC, nome ASC", engine)
+
+    if df_bc.empty:
+        st.info("Nenhum material cadastrado na base de dados.")
+    else:
+        c_filtro1, c_filtro2 = st.columns(2)
+        with c_filtro1:
+            limite_qtd = st.number_input("Definir limite para 'Pouco Estoque' (menor ou igual a):", min_value=0, value=3, step=1)
+        with c_filtro2:
+            modo_view = st.selectbox("Filtrar Exibição:", [
+                "🔥 Peças Críticas COM Pouco Estoque (Prioridade Máxima)",
+                "⚠️ Apenas Peças com Pouco Estoque",
+                "🚨 Apenas Peças Marcadas como Críticas (Qualquer quantidade)",
+                "📋 Todas as Peças (Ordenadas por menor quantidade)"
+            ])
+
+        if "Prioridade Máxima" in modo_view:
+            df_resultado = df_bc[(df_bc['critico'] == True) & (df_bc['quanti'] <= limite_qtd)]
+        elif "Pouco Estoque" in modo_view:
+            df_resultado = df_bc[df_bc['quanti'] <= limite_qtd]
+        elif "Marcadas como Críticas" in modo_view:
+            df_resultado = df_bc[df_bc['critico'] == True]
+        else:
+            df_resultado = df_bc
+
+        st.metric("Total de Peças Encontradas na Consulta", len(df_resultado))
+        st.divider()
+
+        if df_resultado.empty:
+            st.success("Nenhuma peça atende aos critérios do filtro selecionado!")
+        else:
+            st.dataframe(
+                df_resultado[['id', 'nome', 'cod', 'cod_ref', 'quanti', 'critico', 'estante', 'prateleira', 'caixa', 'ncm']],
+                use_container_width=True,
+                hide_index=True
+            )
+
+# =========================================================
+# MÓDULO 5: CADASTRO E EDIÇÃO DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
@@ -641,7 +684,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         ecaixa = st.text_input("Caixa", value=str(row_e['caixa']) if row_e['caixa'] else "")
                         eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
 
-                    # Obtém valor atual do campo crítico (trata valores ausentes/nulos)
                     val_critico = bool(row_e['critico']) if 'critico' in row_e and pd.notna(row_e['critico']) else False
                     ecritico = st.checkbox("⚠️ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
 
@@ -665,7 +707,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 5: HISTÓRICO (LOGS)
+# MÓDULO 6: HISTÓRICO (LOGS)
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações e Logs")
@@ -676,22 +718,3 @@ elif menu == "📜 Histórico (Logs)":
         st.info("Nenhuma movimentação registrada no histórico.")
     else:
         st.dataframe(df_hist, use_container_width=True)
-
-# =========================================================
-# MÓDULO 6: CONSULTA RÁPIDA NCM
-# =========================================================
-elif menu == "🔍 Consulta Rápida NCM":
-    st.title("🔍 Consulta Rápida NCM")
-    st.caption("Verifique as NCMs cadastradas na base do sistema.")
-    
-    engine = obter_engine()
-    df_ncm = pd.read_sql("SELECT DISTINCT ncm, nome, cod_ref FROM estoque ORDER BY ncm ASC", engine)
-
-    termo_ncm = st.text_input("Digite o número do NCM ou nome da peça:")
-    if termo_ncm:
-        df_ncm = df_ncm[
-            df_ncm['ncm'].astype(str).str.contains(termo_ncm, case=False, na=False) |
-            df_ncm['nome'].astype(str).str.contains(termo_ncm, case=False, na=False)
-        ]
-
-    st.dataframe(df_ncm, use_container_width=True)
