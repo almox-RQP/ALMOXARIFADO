@@ -366,7 +366,7 @@ if not st.session_state["autenticado"]:
 # =========================================================
 st.sidebar.title("🏢 Estoque Requipel")
 st.sidebar.caption(f"Usuário ativo: {st.session_state.get('usuario_logado', 'Admin')}")
-st.sidebar.success("☁️ Conectado ao Supabase")
+st.sidebar.success("☁️️ Conectado ao Supabase")
 
 if st.sidebar.button("🚪 Sair / Logout"):
     st.session_state["autenticado"] = False
@@ -379,7 +379,7 @@ menu = st.sidebar.radio(
     [
         "📊 Visão Geral / Dashboard",
         "🧰 Ferramentas Especiais",
-        "🛠️️ Gestão de Consertos",
+        "🛠 Gestão de Consertos",
         "📦 Movimentação de Estoque",
         "🚨 Peças Críticas e Pouco Estoque",
         "➕ Cadastrar / Editar Peças",
@@ -483,116 +483,145 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: FERRAMENTAS ESPECIAIS (SEM MARCA)
+# MÓDULO 2: FERRAMENTAS ESPECIAIS
 # =========================================================
 elif menu == "🧰 Ferramentas Especiais":
     st.title("🧰 Controle de Inventário de Ferramentas Especiais")
     st.caption("Acompanhe e controle a retirada e devolução de ferramentas especiais por colaborador.")
 
+    tab_painel_ferr, tab_cad_ferr = st.tabs([
+        "🧰 Painel de Ferramentas",
+        "➕ Cadastrar Nova Ferramenta"
+    ])
+
     engine = obter_engine()
-    df_ferr = pd.read_sql("SELECT * FROM ferramentas_especiais ORDER BY numero ASC, id ASC", engine)
 
-    # Caso a tabela esteja vazia, oferece botão para carregar dados do Excel
-    if df_ferr.empty:
-        st.warning("Nenhuma ferramenta cadastrada no banco de dados.")
-        if st.button("📥 Importar Lista Automática de Ferramentas (Tabela Excel)"):
-            with engine.begin() as conn:
-                for num, fer in DADOS_EXCEL_INICIAL:
-                    conn.execute(text("""
-                        INSERT INTO ferramentas_especiais (numero, ferramenta, status)
-                        VALUES (:num, :fer, 'DISPONIVEL')
-                    """), {"num": num, "fer": fer})
-            st.success("Lista de Ferramentas cadastrada com sucesso!")
-            st.rerun()
-    else:
-        # Métricas no Topo
-        total_f = len(df_ferr)
-        em_uso_f = len(df_ferr[df_ferr['status'] == 'EM_USO'])
-        disp_f = total_f - em_uso_f
+    with tab_painel_ferr:
+        df_ferr = pd.read_sql("SELECT * FROM ferramentas_especiais ORDER BY numero ASC, id ASC", engine)
 
-        mc1, mc2, mc3 = st.columns(3)
-        mc1.metric("Total de Ferramentas", total_f)
-        mc2.metric("✅ Disponíveis no Estoque", disp_f)
-        mc3.metric("🔴 Empréstimos Ativos (Fora)", em_uso_f)
-
-        st.divider()
-
-        # Filtros e Busca
-        f_col1, f_col2 = st.columns([2, 1])
-        with f_col1:
-            busca_f = st.text_input("🔍 Pesquisar Ferramenta por Nome ou Nº:")
-        with f_col2:
-            filtro_status = st.selectbox("Filtrar por Status:", ["Todas", "Apenas Disponíveis", "Apenas Em Uso (Retiradas)"])
-
-        df_exib = df_ferr.copy()
-        
-        if busca_f:
-            df_exib = df_exib[
-                df_exib['ferramenta'].astype(str).str.contains(busca_f, case=False, na=False) |
-                df_exib['numero'].astype(str).str.contains(busca_f, case=False, na=False)
-            ]
-        
-        if filtro_status == "Apenas Disponíveis":
-            df_exib = df_exib[df_exib['status'] == 'DISPONIVEL']
-        elif filtro_status == "Apenas Em Uso (Retiradas)":
-            df_exib = df_exib[df_exib['status'] == 'EM_USO']
-
-        st.markdown("### 📋 Caixinhas de Ferramentas")
-
-        if df_exib.empty:
-            st.info("Nenhuma ferramenta encontrada para a busca.")
+        if df_ferr.empty:
+            st.warning("Nenhuma ferramenta cadastrada no banco de dados.")
+            if st.button("📥 Importar Lista Automática de Ferramentas (Tabela Excel)"):
+                with engine.begin() as conn:
+                    for num, fer in DADOS_EXCEL_INICIAL:
+                        conn.execute(text("""
+                            INSERT INTO ferramentas_especiais (numero, ferramenta, status)
+                            VALUES (:num, :fer, 'DISPONIVEL')
+                        """), {"num": num, "fer": fer})
+                st.success("Lista de Ferramentas cadastrada com sucesso!")
+                st.rerun()
         else:
-            # Exibe as caixinhas em um Grid de 3 Colunas
-            cols = st.columns(3)
-            for idx, (_, row) in enumerate(df_exib.iterrows()):
-                col_atual = cols[idx % 3]
-                
-                with col_atual:
-                    status_is_uso = (row['status'] == 'EM_USO')
+            total_f = len(df_ferr)
+            em_uso_f = len(df_ferr[df_ferr['status'] == 'EM_USO'])
+            disp_f = total_f - em_uso_f
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Total de Ferramentas", total_f)
+            mc2.metric("✅ Disponíveis no Estoque", disp_f)
+            mc3.metric("🔴 Empréstimos Ativos (Fora)", em_uso_f)
+
+            st.divider()
+
+            f_col1, f_col2 = st.columns([2, 1])
+            with f_col1:
+                busca_f = st.text_input("🔍 Pesquisar Ferramenta por Nome ou Nº:")
+            with f_col2:
+                filtro_status = st.selectbox("Filtrar por Status:", ["Todas", "Apenas Disponíveis", "Apenas Em Uso (Retiradas)"])
+
+            df_exib = df_ferr.copy()
+            
+            if busca_f:
+                df_exib = df_exib[
+                    df_exib['ferramenta'].astype(str).str.contains(busca_f, case=False, na=False) |
+                    df_exib['numero'].astype(str).str.contains(busca_f, case=False, na=False)
+                ]
+            
+            if filtro_status == "Apenas Disponíveis":
+                df_exib = df_exib[df_exib['status'] == 'DISPONIVEL']
+            elif filtro_status == "Apenas Em Uso (Retiradas)":
+                df_exib = df_exib[df_exib['status'] == 'EM_USO']
+
+            st.markdown("### 📋 Caixinhas de Ferramentas")
+
+            if df_exib.empty:
+                st.info("Nenhuma ferramenta encontrada para a busca.")
+            else:
+                cols = st.columns(3)
+                for idx, (_, row) in enumerate(df_exib.iterrows()):
+                    col_atual = cols[idx % 3]
                     
-                    with st.container(border=True):
-                        st.subheader(f"#{row['numero']} - {row['ferramenta']}")
+                    with col_atual:
+                        status_is_uso = (row['status'] == 'EM_USO')
+                        
+                        with st.container(border=True):
+                            st.subheader(f"#{row['numero']} - {row['ferramenta']}")
 
-                        if status_is_uso:
-                            st.error("🔴 **FORA DE ESTOQUE (EM USO)**")
-                            st.markdown(f"👤 **Com:** `{row['responsavel']}`")
-                            st.markdown(f"🕒 **Retirado em:** {row['data_retirada']}")
-                            
-                            dev_por = st.text_input("Quem devolveu?", key=f"dev_usr_{row['id']}", placeholder="Nome do responsável")
-                            if st.button("📥 Registrar Devolução", key=f"btn_dev_{row['id']}", type="primary"):
-                                nome_dev = dev_por.strip() if dev_por else row['responsavel']
-                                dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                                obs_hist = f"Devolvido por: {nome_dev} em {dt_agora}"
+                            if status_is_uso:
+                                st.error("🔴 **FORA DE ESTOQUE (EM USO)**")
+                                st.markdown(f"👤 **Com:** `{row['responsavel']}`")
+                                st.markdown(f"🕒 **Retirado em:** {row['data_retirada']}")
                                 
-                                with engine.begin() as conn:
-                                    conn.execute(text("""
-                                        UPDATE ferramentas_especiais 
-                                        SET status='DISPONIVEL', responsavel=NULL, data_retirada=NULL, historico_devolucao=:hist
-                                        WHERE id=:id
-                                    """), {"hist": obs_hist, "id": row['id']})
-                                
-                                registrar_historico("DEVOLUCAO_FERRAMENTA", row['ferramenta'], 1, f"Devolvido por: {nome_dev}")
-                                st.success(f"Devolução de #{row['numero']} registrada!")
-                                st.rerun()
-
-                        else:
-                            st.success("✅ **DISPONÍVEL NO ESTOQUE**")
-                            usr_pegou = st.text_input("Quem está pegando?", key=f"peg_usr_{row['id']}", placeholder="Nome de quem retirou")
-                            if st.button("📤 Registrar Saída", key=f"btn_saida_{row['id']}"):
-                                if not usr_pegou:
-                                    st.warning("Informe o nome de quem está retirando a ferramenta!")
-                                else:
+                                dev_por = st.text_input("Quem devolveu?", key=f"dev_usr_{row['id']}", placeholder="Nome do responsável")
+                                if st.button("📥 Registrar Devolução", key=f"btn_dev_{row['id']}", type="primary"):
+                                    nome_dev = dev_por.strip() if dev_por else row['responsavel']
                                     dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                    obs_hist = f"Devolvido por: {nome_dev} em {dt_agora}"
+                                    
                                     with engine.begin() as conn:
                                         conn.execute(text("""
                                             UPDATE ferramentas_especiais 
-                                            SET status='EM_USO', responsavel=:resp, data_retirada=:dt
+                                            SET status='DISPONIVEL', responsavel=NULL, data_retirada=NULL, historico_devolucao=:hist
                                             WHERE id=:id
-                                        """), {"resp": usr_pegou.strip(), "dt": dt_agora, "id": row['id']})
+                                        """), {"hist": obs_hist, "id": row['id']})
                                     
-                                    registrar_historico("RETIRADA_FERRAMENTA", row['ferramenta'], 1, f"Retirado por: {usr_pegou.strip()}")
-                                    st.success(f"Empréstimo para {usr_pegou.strip()} registrado!")
+                                    registrar_historico("DEVOLUCAO_FERRAMENTA", row['ferramenta'], 1, f"Devolvido por: {nome_dev}")
+                                    st.success(f"Devolução de #{row['numero']} registrada!")
                                     st.rerun()
+
+                            else:
+                                st.success("✅ **DISPONÍVEL NO ESTOQUE**")
+                                usr_pegou = st.text_input("Quem está pegando?", key=f"peg_usr_{row['id']}", placeholder="Nome de quem retirou")
+                                if st.button("📤 Registrar Saída", key=f"btn_saida_{row['id']}"):
+                                    if not usr_pegou:
+                                        st.warning("Informe o nome de quem está retirando a ferramenta!")
+                                    else:
+                                        dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                                        with engine.begin() as conn:
+                                            conn.execute(text("""
+                                                UPDATE ferramentas_especiais 
+                                                SET status='EM_USO', responsavel=:resp, data_retirada=:dt
+                                                WHERE id=:id
+                                            """), {"resp": usr_pegou.strip(), "dt": dt_agora, "id": row['id']})
+                                        
+                                        registrar_historico("RETIRADA_FERRAMENTA", row['ferramenta'], 1, f"Retirado por: {usr_pegou.strip()}")
+                                        st.success(f"Empréstimo para {usr_pegou.strip()} registrado!")
+                                        st.rerun()
+
+    # ABA PARA CADASTRAR NOVAS FERRAMENTAS ESPECIAIS
+    with tab_cad_ferr:
+        st.subheader("➕ Cadastrar Nova Ferramenta Especial no Inventário")
+        with st.form("form_cad_nova_ferramenta", clear_on_submit=True):
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                num_ferr = st.number_input("Número de Identificação (#)", min_value=1, step=1)
+            with col_f2:
+                nome_ferr = st.text_input("Nome / Descrição da Ferramenta *")
+
+            btn_cad_f = st.form_submit_button("💾 SALVAR FERRAMENTA")
+
+            if btn_cad_f:
+                if not nome_ferr:
+                    st.warning("O nome da ferramenta é obrigatório!")
+                else:
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO ferramentas_especiais (numero, ferramenta, status)
+                            VALUES (:num, :fer, 'DISPONIVEL')
+                        """), {"num": num_ferr, "fer": nome_ferr.strip()})
+                    
+                    registrar_historico("CADASTRO_FERRAMENTA", nome_ferr.strip(), 1, f"Número: #{num_ferr}")
+                    st.success(f"Ferramenta #{num_ferr} - '{nome_ferr}' cadastrada com sucesso!")
+                    st.rerun()
 
 # =========================================================
 # MÓDULO 3: GESTÃO DE CONSERTOS
@@ -822,7 +851,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
     df_bc = pd.read_sql("SELECT * FROM estoque ORDER BY quanti ASC, nome ASC", engine)
 
     if df_bc.empty:
-        st.info("Nenhum material cadastrado na base de dados.")
+        st.info("Nenum material cadastrado na base de dados.")
     else:
         c_filtro1, c_filtro2 = st.columns(2)
         with c_filtro1:
@@ -1024,7 +1053,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
 
                     val_critico = bool(row_e['critico']) if 'critico' in row_e and pd.notna(row_e['critico']) else False
-                    ecritico = st.checkbox("⚠️️ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
+                    ecritico = st.checkbox("⚠ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
 
                     b_edit = st.form_submit_button("💾 Salvar Alterações Apenas Nesta Peça")
                     if b_edit:
