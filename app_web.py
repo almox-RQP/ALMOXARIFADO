@@ -379,7 +379,7 @@ menu = st.sidebar.radio(
     [
         "📊 Visão Geral / Dashboard",
         "🧰 Ferramentas Especiais",
-        "🛠️ Gestão de Consertos",
+        "🛠️️ Gestão de Consertos",
         "📦 Movimentação de Estoque",
         "🚨 Peças Críticas e Pouco Estoque",
         "➕ Cadastrar / Editar Peças",
@@ -887,7 +887,11 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
     
-    tab_cad, tab_edit = st.tabs(["Cadastrar Novo Material", "Editar / Excluir Existente"])
+    tab_cad, tab_especial, tab_edit = st.tabs([
+        "Cadastrar Novo Material", 
+        "⭐ Cadastrar Peça Especial", 
+        "Editar / Excluir Existente"
+    ])
     
     # SUB-ABA 1: CADASTRO INDIVIDUAL
     with tab_cad:
@@ -930,7 +934,53 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     registrar_historico("CADASTRO", nome, qtd, f"Crítico: {'Sim' if is_critico else 'Não'}")
                     st.success(f"Material '{nome}' cadastrado no Supabase!")
 
-    # SUB-ABA 2: EDIÇÃO INDIVIDUAL POR ID E FILTRO
+    # SUB-ABA 2: CADASTRO DE PEÇA ESPECIAL
+    with tab_especial:
+        st.subheader("⭐ Cadastrar Peça Especial / Usinada / Sob Encomenda")
+        with st.form("form_cadastro_especial", clear_on_submit=True):
+            nome_esp = st.text_input("Nome da Peça Especial / Projeto *")
+            
+            ce1, ce2 = st.columns(2)
+            with ce1:
+                cod_esp = st.text_input("Código Interno Especial:")
+                ref_esp = st.text_input("Código Desenho / Referência:")
+                ncm_esp = st.text_input("NCM (Formato XXXX.XX.XX) *", placeholder="Ex: 8481.80.99")
+                preco_esp = st.number_input("Preço Estimado / Custo (R$):", min_value=0.0, step=0.01)
+            with ce2:
+                estante_esp = st.text_input("Estante:")
+                prateleira_esp = st.text_input("Prateleira:")
+                caixa_esp = st.text_input("Caixa / Posição:")
+                qtd_esp = st.number_input("Quantidade Inicial:", min_value=0, step=1)
+            
+            obs_especial = st.text_area("Observação Técnica / Detalhes do Projeto Especial:")
+            is_critico_esp = st.checkbox("⚠️ Marcar como Item Crítico Especial", value=True)
+
+            btn_salvar_especial = st.form_submit_button("⭐ CADASTRAR PEÇA ESPECIAL")
+
+            if btn_salvar_especial:
+                if not nome_esp:
+                    st.warning("O campo Nome da Peça Especial é obrigatório!")
+                elif not ncm_esp:
+                    st.error("O campo NCM é obrigatório!")
+                elif not validar_ncm(ncm_esp):
+                    st.error("Formato do NCM inválido! Utilize XXXX.XX.XX")
+                else:
+                    nome_final = f"[ESPECIAL] {nome_esp}"
+                    engine = obter_engine()
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
+                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
+                        """), {
+                            "nome": nome_final, "cod": cod_esp, "ref": ref_esp, "ncm": ncm_esp.strip(),
+                            "estante": estante_esp, "prateleira": prateleira_esp, "caixa": caixa_esp,
+                            "quanti": qtd_esp, "preco": preco_esp, "critico": is_critico_esp
+                        })
+                    obs_log = f"Peça Especial | Obs: {obs_especial}" if obs_especial else "Peça Especial"
+                    registrar_historico("CADASTRO_ESPECIAL", nome_final, qtd_esp, obs_log)
+                    st.success(f"Peça Especial '{nome_final}' cadastrada com sucesso!")
+
+    # SUB-ABA 3: EDIÇÃO INDIVIDUAL POR ID E FILTRO
     with tab_edit:
         engine = obter_engine()
         df_edit = pd.read_sql("SELECT * FROM estoque ORDER BY nome ASC", engine)
@@ -974,7 +1024,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         eqtd = st.number_input("Quantidade", value=int(row_e['quanti']) if row_e['quanti'] else 0)
 
                     val_critico = bool(row_e['critico']) if 'critico' in row_e and pd.notna(row_e['critico']) else False
-                    ecritico = st.checkbox("⚠️ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
+                    ecritico = st.checkbox("⚠️️ Item Crítico (Prioridade Alta / Alerta de Reposição)", value=val_critico)
 
                     b_edit = st.form_submit_button("💾 Salvar Alterações Apenas Nesta Peça")
                     if b_edit:
