@@ -499,15 +499,15 @@ elif menu == "🧰 Ferramentas Especiais":
                                     dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                                     obs_hist = f"Devolvido por: {nome_dev} em {dt_agora}"
                                     
-                                    with engine.connect() as conn:
+                                    with engine.begin() as conn:
                                         conn.execute(text("""
                                             UPDATE ferramentas_especiais 
                                             SET status='DISPONIVEL', responsavel=NULL, data_retirada=NULL, historico_devolucao=:hist
                                             WHERE id=:id
                                         """), {"hist": obs_hist, "id": row['id']})
-                                        conn.commit()
                                     
                                     registrar_historico("DEVOLUCAO_FERRAMENTA", row['ferramenta'], 1, f"Devolvido por: {nome_dev}")
+                                    st.cache_data.clear()
                                     st.success(f"Devolução de #{row['numero']} registrada!")
                                     st.rerun()
 
@@ -519,15 +519,15 @@ elif menu == "🧰 Ferramentas Especiais":
                                         st.warning("Informe o nome de quem está retirando a ferramenta!")
                                     else:
                                         dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                                        with engine.connect() as conn:
+                                        with engine.begin() as conn:
                                             conn.execute(text("""
                                                 UPDATE ferramentas_especiais 
                                                 SET status='EM_USO', responsavel=:resp, data_retirada=:dt
                                                 WHERE id=:id
                                             """), {"resp": usr_pegou.strip(), "dt": dt_agora, "id": row['id']})
-                                            conn.commit()
                                         
                                         registrar_historico("RETIRADA_FERRAMENTA", row['ferramenta'], 1, f"Retirado por: {usr_pegou.strip()}")
+                                        st.cache_data.clear()
                                         st.success(f"Empréstimo para {usr_pegou.strip()} registrado!")
                                         st.rerun()
 
@@ -546,14 +546,14 @@ elif menu == "🧰 Ferramentas Especiais":
                 if not nome_ferr:
                     st.warning("O nome da ferramenta é obrigatório!")
                 else:
-                    with engine.connect() as conn:
+                    with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO ferramentas_especiais (numero, ferramenta, status)
                             VALUES (:num, :fer, 'DISPONIVEL')
                         """), {"num": num_ferr, "fer": nome_ferr.strip()})
-                        conn.commit()
                     
                     registrar_historico("CADASTRO_FERRAMENTA", nome_ferr.strip(), 1, f"Número: #{num_ferr}")
+                    st.cache_data.clear()
                     st.success(f"Ferramenta #{num_ferr} - '{nome_ferr}' cadastrada com sucesso!")
                     st.rerun()
 
@@ -595,8 +595,8 @@ elif menu == "🛠 Gestão de Consertos":
                     url_p = salvar_imagem_nuvem(f_peca, "peca")
                     url_nf = salvar_imagem_nuvem(f_nf, "nf")
 
-                    engine = obtaining_engine = obter_engine()
-                    with engine.connect() as conn:
+                    engine = obter_engine()
+                    with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO consertos (item_nome, cod_ref, data_envio, oficina, num_nf, defeito, caminho_foto_peca, caminho_foto_nf, status)
                             VALUES (:nome, :ref, :data, :oficina, :nf, :defeito, :peca, :fotof, 'Aguardando Coleta')
@@ -604,8 +604,8 @@ elif menu == "🛠 Gestão de Consertos":
                             "nome": item_nome, "ref": cod_ref, "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                             "oficina": oficina, "nf": num_nf, "defeito": defeito, "peca": url_p, "fotof": url_nf
                         })
-                        conn.commit()
                     registrar_historico("CADASTRO_CONSERTO", item_nome, 1, f"Oficina: {oficina}")
+                    st.cache_data.clear()
                     st.success("Peça e imagens salvas com sucesso no Supabase!")
                     st.rerun()
 
@@ -643,22 +643,23 @@ elif menu == "🛠 Gestão de Consertos":
                 with col_acao:
                     st.warning("Status: Aguardando Coleta")
                     if st.button("🚚 Confirmar Coleta", key=f"col_{row['id']}"):
-                        with engine.connect() as conn:
+                        with engine.begin() as conn:
                             conn.execute(text("UPDATE consertos SET status = 'Em Conserto' WHERE id = :id"), {"id": row['id']})
-                            conn.commit()
                         registrar_historico("COLETADO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
+                        st.cache_data.clear()
                         st.success("Coleta confirmada!")
                         st.rerun()
 
                     if st.button("🗑️ Excluir Registro", key=f"del_col_{row['id']}", type="secondary"):
                         if excluir_conserto(row['id']):
+                            st.cache_data.clear()
                             st.success("Registro excluído!")
                             st.rerun()
 
                 st.divider()
 
     with tab_manut:
-        st.subheader("🛠️ Peças em Manutenção na Oficina")
+        st.subheader("🛠️️ Peças em Manutenção na Oficina")
         engine = obter_engine()
         df_manut = pd.read_sql("SELECT * FROM consertos WHERE status = 'Em Conserto' OR status IS NULL ORDER BY id DESC", engine)
 
@@ -691,15 +692,16 @@ elif menu == "🛠 Gestão de Consertos":
                 with col_acao:
                     st.info("Status: Em Manutenção")
                     if st.button("✅ Confirmar Retorno ao Estoque", key=f"ret_{row['id']}"):
-                        with engine.connect() as conn:
+                        with engine.begin() as conn:
                             conn.execute(text("UPDATE consertos SET status = 'Retornado' WHERE id = :id"), {"id": row['id']})
-                            conn.commit()
                         registrar_historico("RETORNO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
+                        st.cache_data.clear()
                         st.success("Retorno registrado com sucesso!")
                         st.rerun()
 
                     if st.button("🗑️ Excluir Registro", key=f"del_man_{row['id']}", type="secondary"):
                         if excluir_conserto(row['id']):
+                            st.cache_data.clear()
                             st.success("Registro excluído!")
                             st.rerun()
 
@@ -725,7 +727,7 @@ elif menu == "📦 Movimentação de Estoque":
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenum material cadastrado para movimentar.")
+        st.warning("Nenhum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -770,7 +772,8 @@ elif menu == "📦 Movimentação de Estoque":
                 obs_mov = st.text_area("Observação / Destino / Motivo:")
 
             if st.button("🚀 Confirmar Movimentação", type="primary"):
-                with engine.connect() as conn:
+                # Usando engine.begin() para criar a transação e garantir o COMMIT no Supabase
+                with engine.begin() as conn:
                     res_mat = conn.execute(text("SELECT nome, quanti FROM estoque WHERE id = :id"), {"id": mat_id}).fetchone()
                     if res_mat:
                         nome_mat, qtd_atual = res_mat[0], res_mat[1]
@@ -782,14 +785,13 @@ elif menu == "📦 Movimentação de Estoque":
                         else:
                             nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
                             
-                            # Executa o UPDATE e força o COMMIT no banco Supabase
+                            # Atualiza o banco de dados dentro do bloco gerenciado (com commit automático)
                             conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": mat_id})
-                            conn.commit()
                             
                             tipo_str = "SAÍDA" if is_saida else "ENTRADA"
                             registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
                             
-                            # Limpa o cache do Streamlit para forçar leitura limpa do banco
+                            # Limpa o cache do Streamlit para forçar a atualização imediata da interface
                             st.cache_data.clear()
                             
                             st.success(f"Movimentação de {tipo_str} realizada! Novo saldo: {nova_qtd}")
@@ -806,7 +808,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
     df_bc = pd.read_sql("SELECT * FROM estoque ORDER BY quanti ASC, nome ASC", engine)
 
     if df_bc.empty:
-        st.info("Nenhum material cadastrado na base de dados.")
+        st.info("Nenum material cadastrado na base de dados.")
     else:
         c_filtro1, c_filtro2 = st.columns(2)
         with c_filtro1:
@@ -902,7 +904,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     st.error("Formato do NCM inválido! Utilize XXXX.XX.XX")
                 else:
                     engine = obter_engine()
-                    with engine.connect() as conn:
+                    with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
                             VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
@@ -911,7 +913,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             "estante": estante, "prateleira": prateleira, "caixa": caixa,
                             "quanti": qtd, "preco": preco, "critico": is_critico
                         })
-                        conn.commit()
                     registrar_historico("CADASTRO", nome, qtd, f"Crítico: {'Sim' if is_critico else 'Não'}")
                     st.cache_data.clear()
                     st.success(f"Material '{nome}' cadastrado no Supabase!")
@@ -948,7 +949,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                 else:
                     nome_final = f"[ESPECIAL] {nome_esp}"
                     engine = obter_engine()
-                    with engine.connect() as conn:
+                    with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
                             VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
@@ -957,7 +958,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             "estante": estante_esp, "prateleira": prateleira_esp, "caixa": caixa_esp,
                             "quanti": qtd_esp, "preco": preco_esp, "critico": is_critico_esp
                         })
-                        conn.commit()
                     obs_log = f"Peça Especial | Obs: {obs_especial}" if obs_especial else "Peça Especial"
                     registrar_historico("CADASTRO_ESPECIAL", nome_final, qtd_esp, obs_log)
                     st.cache_data.clear()
@@ -1013,7 +1013,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         if not validar_ncm(encm):
                             st.error("Formato NCM inválido! Use XXXX.XX.XX")
                         else:
-                            with engine.connect() as conn:
+                            with engine.begin() as conn:
                                 conn.execute(text("""
                                     UPDATE estoque 
                                     SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
@@ -1023,7 +1023,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
                                     "est": eestante, "prat": eprat, "caixa": ecaixa,
                                     "qtd": eqtd, "preco": epreco, "critico": ecritico, "id": id_material
                                 })
-                                conn.commit()
                             registrar_historico("EDICAO", enome, eqtd, f"ID #{id_material} modificado. Crítico: {'Sim' if ecritico else 'Não'}")
                             st.cache_data.clear()
                             st.success("Peça atualizada no banco em nuvem!")
