@@ -366,7 +366,7 @@ if not st.session_state["autenticado"]:
 # =========================================================
 st.sidebar.title("🏢 Estoque Requipel")
 st.sidebar.caption(f"Usuário ativo: {st.session_state.get('usuario_logado', 'Admin')}")
-st.sidebar.success("☁️️ Conectado ao Supabase")
+st.sidebar.success("☁ Conectado ao Supabase")
 
 if st.sidebar.button("🚪 Sair / Logout"):
     st.session_state["autenticado"] = False
@@ -626,7 +626,7 @@ elif menu == "🧰 Ferramentas Especiais":
 # =========================================================
 # MÓDULO 3: GESTÃO DE CONSERTOS
 # =========================================================
-elif menu == "🛠️ Gestão de Consertos":
+elif menu == "🛠 Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
     
     tab_cad, tab_coleta, tab_manut, tab_ret = st.tabs([
@@ -789,7 +789,8 @@ elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
     
     engine = obter_engine()
-    df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti FROM estoque ORDER BY nome ASC", engine)
+    # Consulta incluindo os campos de localização da peça
+    df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
         st.warning("Nenhum material cadastrado para movimentar.")
@@ -814,6 +815,22 @@ elif menu == "📦 Movimentação de Estoque":
             
             mat_sel = st.selectbox("Selecione o Material Desejado:", list(opcoes_mat.keys()))
             mat_id = opcoes_mat[mat_sel]
+
+            # Obter os dados completos da peça selecionada para mostrar a localização
+            dados_peca = df_filtrado[df_filtrado['id'] == mat_id].iloc[0]
+
+            # Exibição visual destacada da localização da peça
+            estante_info = dados_peca['estante'] if pd.notna(dados_peca['estante']) and dados_peca['estante'] else "Não Inf."
+            prat_info = dados_peca['prateleira'] if pd.notna(dados_peca['prateleira']) and dados_peca['prateleira'] else "Não Inf."
+            caixa_info = dados_peca['caixa'] if pd.notna(dados_peca['caixa']) and dados_peca['caixa'] else "Não Inf."
+
+            st.info(f"""
+            📍 **Localização no Estoque:**  
+            * **Estante:** `{estante_info}` | **Prateleira:** `{prat_info}` | **Caixa/Posição:** `{caixa_info}`  
+            📦 **Quantidade Atual Disponível:** `{int(dados_peca['quanti'])} unidades`
+            """)
+
+            st.divider()
 
             col1, col2 = st.columns(2)
             with col1:
