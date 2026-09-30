@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
+from streamlit_qrcode_scanner import qrcode_scanner
 
 # Bibliotecas para geração de PDF
 from reportlab.lib.pagesizes import letter
@@ -783,7 +784,7 @@ elif menu == "🛠 Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE
+# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE (COM SCANNER QR / CÓDIGO DE BARRAS)
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
@@ -795,7 +796,18 @@ elif menu == "📦 Movimentação de Estoque":
     if df_estoque.empty:
         st.warning("Nenhum material cadastrado para movimentar.")
     else:
-        termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
+        # Integracao do Leitor de Codigos de Barra / QR Code
+        with st.expander("📷 Abrir Leitor de Código de Barras / QR Code", expanded=False):
+            st.caption("Aproxime o código da câmara para selecionar a peça automaticamente.")
+            qrcode = qrcode_scanner(key="scanner_movimentacao")
+            if qrcode:
+                st.success(f"Código lido: **{qrcode}**")
+
+        c_busca1, c_busca2 = st.columns([3, 1])
+        with c_busca1:
+            # Se um código foi lido pela câmara, preenche o campo automaticamente
+            valor_inicial_busca = str(qrcode) if qrcode else ""
+            termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:", value=valor_inicial_busca)
         
         df_filtrado = df_estoque.copy()
         if termo_busca:
