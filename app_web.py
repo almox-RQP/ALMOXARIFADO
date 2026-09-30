@@ -28,7 +28,7 @@ st.set_page_config(
 def obter_engine():
     try:
         db_url = st.secrets["postgres"]["url"]
-        return create_engine(db_url)
+        return create_engine(db_url, isolation_level="AUTOCOMMIT")
     except Exception as e:
         st.error(f"Erro ao conectar ao banco de dados: {e}")
         st.stop()
@@ -58,20 +58,18 @@ def registrar_historico(tipo, item_nome, quantidade, obs=""):
     except Exception:
         pass
 
-# Funcao auxiliar para gerar o PDF formatado de Solicitacao de Compras
 def gerar_pdf_compras(df_itens):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
     styles = getSampleStyleSheet()
 
-    # Estilos customizados
     title_style = ParagraphStyle(
         'DocTitle',
         parent=styles['Heading1'],
         fontSize=16,
         leading=20,
-        alignment=1, # Centralizado
+        alignment=1,
         textColor=colors.HexColor("#1E3A8A")
     )
     
@@ -91,7 +89,6 @@ def gerar_pdf_compras(df_itens):
         leading=11
     )
 
-    # Cabeçalho do Documento
     story.append(Paragraph("<b>REQUI PEL - SOLICITAÇÃO DE COMPRAS DE ESTOQUE</b>", title_style))
     story.append(Spacer(1, 4))
     data_str = datetime.now().strftime("%d/%m/%Y - %H:%M")
@@ -99,7 +96,6 @@ def gerar_pdf_compras(df_itens):
     story.append(Paragraph(f"Data de Emissão: {data_str} | Solicitante: {solicitante}", sub_style))
     story.append(Spacer(1, 15))
 
-    # Tabela de Itens
     dados_tabela = [["Código / REF", "Descrição da Peça / Material", "NCM", "Est. Atual", "Status/Crítico"]]
     
     for _, row in df_itens.iterrows():
@@ -139,9 +135,6 @@ def gerar_pdf_compras(df_itens):
     buffer.seek(0)
     return buffer
 
-# =========================================================
-# UPLOAD DE IMAGENS DIRETO PARA O SUPABASE STORAGE
-# =========================================================
 def salvar_imagem_nuvem(file_obj, prefixo):
     if not file_obj:
         return ""
@@ -178,58 +171,6 @@ def excluir_conserto(id_conserto):
             registrar_historico("EXCLUSAO_CONSERTO", nome_item, 1, "Registro excluído manualmente")
             return True
     return False
-
-# Dados do Inventário do Excel para Carga Inicial Automática (Sem marca)
-DADOS_EXCEL_INICIAL = [
-    (1, "Manômetro pressão"),
-    (2, "Medidor de pressão"),
-    (3, "Medidor de distância"),
-    (4, "Regulador de argônio"),
-    (5, "Terminais e adaptadores"),
-    (6, "Pneumática vermelha"),
-    (7, "Pneumática amarela"),
-    (8, "Alicate hidráulico"),
-    (9, "Pistola de ponto vermelha"),
-    (10, "Pistola de ponto preta"),
-    (11, "Paquímetro digital"),
-    (12, "Paquímetro normal"),
-    (13, "Flangeador"),
-    (14, "Medidor com base"),
-    (15, "Hand set zapi c/ cabos"),
-    (16, "Hand set curtis c/ cabos"),
-    (17, "Hand set voltex c/ cabos"),
-    (18, "Notebook"),
-    (20, "Tirador de solda"),
-    (21, "Ferro de solda"),
-    (22, "Torquímetro laranja"),
-    (23, "Torquímetro preto"),
-    (24, "Extrator pequeno"),
-    (25, "Saca filtro"),
-    (26, "Alicate amperímetro"),
-    (27, "Torquesa"),
-    (28, "Extrator grande"),
-    (29, "Cabo de bateria / carregar"),
-    (30, "Engates rápido mandril"),
-    (31, "Jogo de retífica"),
-    (32, "Furadeira impacto"),
-    (33, "Furadeira impacto"),
-    (34, "Lixadeira"),
-    (35, "Jogo de cachimbo pesada"),
-    (36, "Manômetro"),
-    (37, "Manômetro hidráulico"),
-    (38, "Lava jato"),
-    (39, "Carregador de bateria"),
-    (40, "Solda caneta"),
-    (40, "Lixadeira grande"),
-    (41, "SCHWEERS"),
-    (42, "SCHWEERS MENOR"),
-    (43, "Bico de encher pneu"),
-    (44, "Saca filtro"),
-    (45, "Compressor amarelo"),
-    (46, "Vela / Tela fibra de vidro 50 metros"),
-    (47, "Lupa"),
-    (48, "Talha")
-]
 
 # =========================================================
 # 2. INICIALIZAÇÃO E MIGRAÇÃO DAS TABELAS NO SUPABASE
@@ -501,15 +442,6 @@ elif menu == "🧰 Ferramentas Especiais":
 
         if df_ferr.empty:
             st.warning("Nenhuma ferramenta cadastrada no banco de dados.")
-            if st.button("📥 Importar Lista Automática de Ferramentas (Tabela Excel)"):
-                with engine.begin() as conn:
-                    for num, fer in DADOS_EXCEL_INICIAL:
-                        conn.execute(text("""
-                            INSERT INTO ferramentas_especiais (numero, ferramenta, status)
-                            VALUES (:num, :fer, 'DISPONIVEL')
-                        """), {"num": num, "fer": fer})
-                st.success("Lista de Ferramentas cadastrada com sucesso!")
-                st.rerun()
         else:
             total_f = len(df_ferr)
             em_uso_f = len(df_ferr[df_ferr['status'] == 'EM_USO'])
@@ -567,12 +499,13 @@ elif menu == "🧰 Ferramentas Especiais":
                                     dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                                     obs_hist = f"Devolvido por: {nome_dev} em {dt_agora}"
                                     
-                                    with engine.begin() as conn:
+                                    with engine.connect() as conn:
                                         conn.execute(text("""
                                             UPDATE ferramentas_especiais 
                                             SET status='DISPONIVEL', responsavel=NULL, data_retirada=NULL, historico_devolucao=:hist
                                             WHERE id=:id
                                         """), {"hist": obs_hist, "id": row['id']})
+                                        conn.commit()
                                     
                                     registrar_historico("DEVOLUCAO_FERRAMENTA", row['ferramenta'], 1, f"Devolvido por: {nome_dev}")
                                     st.success(f"Devolução de #{row['numero']} registrada!")
@@ -586,18 +519,18 @@ elif menu == "🧰 Ferramentas Especiais":
                                         st.warning("Informe o nome de quem está retirando a ferramenta!")
                                     else:
                                         dt_agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                                        with engine.begin() as conn:
+                                        with engine.connect() as conn:
                                             conn.execute(text("""
                                                 UPDATE ferramentas_especiais 
                                                 SET status='EM_USO', responsavel=:resp, data_retirada=:dt
                                                 WHERE id=:id
                                             """), {"resp": usr_pegou.strip(), "dt": dt_agora, "id": row['id']})
+                                            conn.commit()
                                         
                                         registrar_historico("RETIRADA_FERRAMENTA", row['ferramenta'], 1, f"Retirado por: {usr_pegou.strip()}")
                                         st.success(f"Empréstimo para {usr_pegou.strip()} registrado!")
                                         st.rerun()
 
-    # ABA PARA CADASTRAR NOVAS FERRAMENTAS ESPECIAIS
     with tab_cad_ferr:
         st.subheader("➕ Cadastrar Nova Ferramenta Especial no Inventário")
         with st.form("form_cad_nova_ferramenta", clear_on_submit=True):
@@ -613,11 +546,12 @@ elif menu == "🧰 Ferramentas Especiais":
                 if not nome_ferr:
                     st.warning("O nome da ferramenta é obrigatório!")
                 else:
-                    with engine.begin() as conn:
+                    with engine.connect() as conn:
                         conn.execute(text("""
                             INSERT INTO ferramentas_especiais (numero, ferramenta, status)
                             VALUES (:num, :fer, 'DISPONIVEL')
                         """), {"num": num_ferr, "fer": nome_ferr.strip()})
+                        conn.commit()
                     
                     registrar_historico("CADASTRO_FERRAMENTA", nome_ferr.strip(), 1, f"Número: #{num_ferr}")
                     st.success(f"Ferramenta #{num_ferr} - '{nome_ferr}' cadastrada com sucesso!")
@@ -636,7 +570,6 @@ elif menu == "🛠 Gestão de Consertos":
         "✅ 4. Peças Retornadas"
     ])
     
-    # TAB 1: CADASTRO
     with tab_cad:
         st.subheader("Cadastrar Nova Peça para Manutenção")
         with st.form("form_conserto_novo", clear_on_submit=True):
@@ -662,8 +595,8 @@ elif menu == "🛠 Gestão de Consertos":
                     url_p = salvar_imagem_nuvem(f_peca, "peca")
                     url_nf = salvar_imagem_nuvem(f_nf, "nf")
 
-                    engine = obter_engine()
-                    with engine.begin() as conn:
+                    engine = obtaining_engine = obter_engine()
+                    with engine.connect() as conn:
                         conn.execute(text("""
                             INSERT INTO consertos (item_nome, cod_ref, data_envio, oficina, num_nf, defeito, caminho_foto_peca, caminho_foto_nf, status)
                             VALUES (:nome, :ref, :data, :oficina, :nf, :defeito, :peca, :fotof, 'Aguardando Coleta')
@@ -671,11 +604,11 @@ elif menu == "🛠 Gestão de Consertos":
                             "nome": item_nome, "ref": cod_ref, "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                             "oficina": oficina, "nf": num_nf, "defeito": defeito, "peca": url_p, "fotof": url_nf
                         })
+                        conn.commit()
                     registrar_historico("CADASTRO_CONSERTO", item_nome, 1, f"Oficina: {oficina}")
                     st.success("Peça e imagens salvas com sucesso no Supabase!")
                     st.rerun()
 
-    # TAB 2: AGUARDANDO COLETA
     with tab_coleta:
         st.subheader("⏳ Peças Aguardando Coleta para Ir à Oficina")
         engine = obter_engine()
@@ -710,8 +643,9 @@ elif menu == "🛠 Gestão de Consertos":
                 with col_acao:
                     st.warning("Status: Aguardando Coleta")
                     if st.button("🚚 Confirmar Coleta", key=f"col_{row['id']}"):
-                        with engine.begin() as conn:
+                        with engine.connect() as conn:
                             conn.execute(text("UPDATE consertos SET status = 'Em Conserto' WHERE id = :id"), {"id": row['id']})
+                            conn.commit()
                         registrar_historico("COLETADO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
                         st.success("Coleta confirmada!")
                         st.rerun()
@@ -723,7 +657,6 @@ elif menu == "🛠 Gestão de Consertos":
 
                 st.divider()
 
-    # TAB 3: EM MANUTENÇÃO
     with tab_manut:
         st.subheader("🛠️ Peças em Manutenção na Oficina")
         engine = obter_engine()
@@ -758,8 +691,9 @@ elif menu == "🛠 Gestão de Consertos":
                 with col_acao:
                     st.info("Status: Em Manutenção")
                     if st.button("✅ Confirmar Retorno ao Estoque", key=f"ret_{row['id']}"):
-                        with engine.begin() as conn:
+                        with engine.connect() as conn:
                             conn.execute(text("UPDATE consertos SET status = 'Retornado' WHERE id = :id"), {"id": row['id']})
+                            conn.commit()
                         registrar_historico("RETORNO_CONSERTO", row['item_nome'], 1, f"Oficina: {row['oficina']}")
                         st.success("Retorno registrado com sucesso!")
                         st.rerun()
@@ -771,7 +705,6 @@ elif menu == "🛠 Gestão de Consertos":
 
                 st.divider()
 
-    # TAB 4: PEÇAS RETORNADAS
     with tab_ret:
         st.subheader("✅ Histórico de Peças Retornadas da Manutenção")
         engine = obter_engine()
@@ -789,11 +722,10 @@ elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
     
     engine = obter_engine()
-    # Consulta buscando os dados atualizados das peças
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenhum material cadastrado para movimentar.")
+        st.warning("Nenum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -816,7 +748,6 @@ elif menu == "📦 Movimentação de Estoque":
             mat_sel = st.selectbox("Selecione o Material Desejado:", list(opcoes_mat.keys()))
             mat_id = opcoes_mat[mat_sel]
 
-            # Obter os dados completos da peça selecionada para mostrar a localização e quantidade real
             dados_peca = df_filtrado[df_filtrado['id'] == mat_id].iloc[0]
 
             estante_info = dados_peca['estante'] if pd.notna(dados_peca['estante']) and dados_peca['estante'] else "Não Inf."
@@ -833,38 +764,39 @@ elif menu == "📦 Movimentação de Estoque":
 
             col1, col2 = st.columns(2)
             with col1:
-                tipo_mov = st.radio("Tipo de Movimentação:", ["ENTRADA (Adicionar)", "SAÍDA (Remover)"])
+                tipo_opcao = st.radio("Tipo de Movimentação:", ["SAÍDA (Remover)", "ENTRADA (Adicionar)"])
                 qtd_mov = st.number_input("Quantidade:", min_value=1, step=1)
             with col2:
                 obs_mov = st.text_area("Observação / Destino / Motivo:")
 
-            if st.button("🚀 Confirmar Movimentação"):
-                with engine.begin() as conn:
+            if st.button("🚀 Confirmar Movimentação", type="primary"):
+                with engine.connect() as conn:
                     res_mat = conn.execute(text("SELECT nome, quanti FROM estoque WHERE id = :id"), {"id": mat_id}).fetchone()
                     if res_mat:
                         nome_mat, qtd_atual = res_mat[0], res_mat[1]
 
-                        # Verificação direta da opção selecionada (ignora acentos/caracteres especiais)
-                        is_saida = "SA" in tipo_mov.upper()
+                        is_saida = "SA" in tipo_opcao.upper()
 
                         if is_saida and qtd_mov > qtd_atual:
                             st.error(f"Erro: Quantidade de saída ({qtd_mov}) é maior do que o estoque disponível ({qtd_atual})!")
                         else:
                             nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
                             
-                            # Atualiza a quantidade no banco PostgreSQL no Supabase
+                            # Executa o UPDATE e força o COMMIT no banco Supabase
                             conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": mat_id})
+                            conn.commit()
                             
                             tipo_str = "SAÍDA" if is_saida else "ENTRADA"
                             registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
                             
-                            st.success(f"Movimentação de {tipo_str} realizada com sucesso! Novo saldo: {nova_qtd}")
+                            # Limpa o cache do Streamlit para forçar leitura limpa do banco
+                            st.cache_data.clear()
                             
-                            # Recarrega a aplicação para atualizar instantaneamente o retângulo e o formulário de edição
+                            st.success(f"Movimentação de {tipo_str} realizada! Novo saldo: {nova_qtd}")
                             st.rerun()
 
 # =========================================================
-# MÓDULO 5: PEÇAS CRÍTICAS E POUCO ESTOQUE (COM BOTÃO DE DOWNLOAD PDF/EXCEL)
+# MÓDULO 5: PEÇAS CRÍTICAS E POUCO ESTOQUE
 # =========================================================
 elif menu == "🚨 Peças Críticas e Pouco Estoque":
     st.title("🚨 Monitoramento de Peças Importantes e Baixo Estoque")
@@ -898,11 +830,9 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
 
         st.metric("Total de Peças Encontradas na Consulta", len(df_resultado))
         
-        # --- BOTAO DE DOWNLOAD PARA COMPRAS ---
         if not df_resultado.empty:
             c_btn1, c_btn2 = st.columns(2)
             
-            # Gerar arquivo PDF
             pdf_bytes = gerar_pdf_compras(df_resultado)
             with c_btn1:
                 st.download_button(
@@ -912,7 +842,6 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
                     mime="application/pdf"
                 )
 
-            # Gerar arquivo Excel/CSV
             csv_data = df_resultado.to_csv(index=False).encode('utf-8-sig')
             with c_btn2:
                 st.download_button(
@@ -945,7 +874,6 @@ elif menu == "➕ Cadastrar / Editar Peças":
         "Editar / Excluir Existente"
     ])
     
-    # SUB-ABA 1: CADASTRO INDIVIDUAL
     with tab_cad:
         with st.form("form_cadastro_original", clear_on_submit=True):
             nome = st.text_input("Nome do Material *")
@@ -974,7 +902,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                     st.error("Formato do NCM inválido! Utilize XXXX.XX.XX")
                 else:
                     engine = obter_engine()
-                    with engine.begin() as conn:
+                    with engine.connect() as conn:
                         conn.execute(text("""
                             INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
                             VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
@@ -983,10 +911,11 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             "estante": estante, "prateleira": prateleira, "caixa": caixa,
                             "quanti": qtd, "preco": preco, "critico": is_critico
                         })
+                        conn.commit()
                     registrar_historico("CADASTRO", nome, qtd, f"Crítico: {'Sim' if is_critico else 'Não'}")
+                    st.cache_data.clear()
                     st.success(f"Material '{nome}' cadastrado no Supabase!")
 
-    # SUB-ABA 2: CADASTRO DE PEÇA ESPECIAL
     with tab_especial:
         st.subheader("⭐ Cadastrar Peça Especial / Usinada / Sob Encomenda")
         with st.form("form_cadastro_especial", clear_on_submit=True):
@@ -1019,7 +948,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                 else:
                     nome_final = f"[ESPECIAL] {nome_esp}"
                     engine = obter_engine()
-                    with engine.begin() as conn:
+                    with engine.connect() as conn:
                         conn.execute(text("""
                             INSERT INTO estoque (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
                             VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, :critico)
@@ -1028,11 +957,12 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             "estante": estante_esp, "prateleira": prateleira_esp, "caixa": caixa_esp,
                             "quanti": qtd_esp, "preco": preco_esp, "critico": is_critico_esp
                         })
+                        conn.commit()
                     obs_log = f"Peça Especial | Obs: {obs_especial}" if obs_especial else "Peça Especial"
                     registrar_historico("CADASTRO_ESPECIAL", nome_final, qtd_esp, obs_log)
+                    st.cache_data.clear()
                     st.success(f"Peça Especial '{nome_final}' cadastrada com sucesso!")
 
-    # SUB-ABA 3: EDIÇÃO INDIVIDUAL POR ID E FILTRO
     with tab_edit:
         engine = obter_engine()
         df_edit = pd.read_sql("SELECT * FROM estoque ORDER BY nome ASC", engine)
@@ -1083,7 +1013,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                         if not validar_ncm(encm):
                             st.error("Formato NCM inválido! Use XXXX.XX.XX")
                         else:
-                            with engine.begin() as conn:
+                            with engine.connect() as conn:
                                 conn.execute(text("""
                                     UPDATE estoque 
                                     SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
@@ -1093,7 +1023,9 @@ elif menu == "➕ Cadastrar / Editar Peças":
                                     "est": eestante, "prat": eprat, "caixa": ecaixa,
                                     "qtd": eqtd, "preco": epreco, "critico": ecritico, "id": id_material
                                 })
+                                conn.commit()
                             registrar_historico("EDICAO", enome, eqtd, f"ID #{id_material} modificado. Crítico: {'Sim' if ecritico else 'Não'}")
+                            st.cache_data.clear()
                             st.success("Peça atualizada no banco em nuvem!")
                             st.rerun()
 
