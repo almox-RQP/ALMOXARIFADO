@@ -7,7 +7,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
-from streamlit_qrcode_scanner import qrcode_scanner
 
 # Bibliotecas para geração de PDF
 from reportlab.lib.pagesizes import letter
@@ -784,30 +783,19 @@ elif menu == "🛠 Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE (COM SCANNER QR / CÓDIGO DE BARRAS)
+# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
     
     engine = obter_engine()
-    # Consulta incluindo os campos de localização da peça
+    # Consulta buscando os dados atualizados das peças
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
         st.warning("Nenhum material cadastrado para movimentar.")
     else:
-        # Integracao do Leitor de Codigos de Barra / QR Code
-        with st.expander("📷 Abrir Leitor de Código de Barras / QR Code", expanded=False):
-            st.caption("Aproxime o código da câmara para selecionar a peça automaticamente.")
-            qrcode = qrcode_scanner(key="scanner_movimentacao")
-            if qrcode:
-                st.success(f"Código lido: **{qrcode}**")
-
-        c_busca1, c_busca2 = st.columns([3, 1])
-        with c_busca1:
-            # Se um código foi lido pela câmara, preenche o campo automaticamente
-            valor_inicial_busca = str(qrcode) if qrcode else ""
-            termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:", value=valor_inicial_busca)
+        termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
         df_filtrado = df_estoque.copy()
         if termo_busca:
@@ -828,10 +816,9 @@ elif menu == "📦 Movimentação de Estoque":
             mat_sel = st.selectbox("Selecione o Material Desejado:", list(opcoes_mat.keys()))
             mat_id = opcoes_mat[mat_sel]
 
-            # Obter os dados completos da peça selecionada para mostrar a localização
+            # Obter os dados completos da peça selecionada para mostrar a localização e quantidade real
             dados_peca = df_filtrado[df_filtrado['id'] == mat_id].iloc[0]
 
-            # Exibição visual destacada da localização da peça
             estante_info = dados_peca['estante'] if pd.notna(dados_peca['estante']) and dados_peca['estante'] else "Não Inf."
             prat_info = dados_peca['prateleira'] if pd.notna(dados_peca['prateleira']) and dados_peca['prateleira'] else "Não Inf."
             caixa_info = dados_peca['caixa'] if pd.notna(dados_peca['caixa']) and dados_peca['caixa'] else "Não Inf."
@@ -857,16 +844,23 @@ elif menu == "📦 Movimentação de Estoque":
                     if res_mat:
                         nome_mat, qtd_atual = res_mat[0], res_mat[1]
 
-                        if "SAÍDA" in tipo_mov and qtd_mov > qtd_atual:
-                            st.error("Quantidade de saída é maior do que o estoque disponível!")
+                        # Verificação direta da opção selecionada (ignora acentos/caracteres especiais)
+                        is_saida = "SA" in tipo_mov.upper()
+
+                        if is_saida and qtd_mov > qtd_atual:
+                            st.error(f"Erro: Quantidade de saída ({qtd_mov}) é maior do que o estoque disponível ({qtd_atual})!")
                         else:
-                            nova_qtd = (qtd_atual + qtd_mov) if "ENTRADA" in tipo_mov else (qtd_atual - qtd_mov)
+                            nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
+                            
+                            # Atualiza a quantidade no banco PostgreSQL no Supabase
                             conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": mat_id})
                             
-                            tipo_str = "ENTRADA" if "ENTRADA" in tipo_mov else "SAÍDA"
+                            tipo_str = "SAÍDA" if is_saida else "ENTRADA"
                             registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
                             
-                            st.success(f"Movimentação realizada! Novo estoque: {nova_qtd}")
+                            st.success(f"Movimentação de {tipo_str} realizada com sucesso! Novo saldo: {nova_qtd}")
+                            
+                            # Recarrega a aplicação para atualizar instantaneamente o retângulo e o formulário de edição
                             st.rerun()
 
 # =========================================================
@@ -880,7 +874,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
     df_bc = pd.read_sql("SELECT * FROM estoque ORDER BY quanti ASC, nome ASC", engine)
 
     if df_bc.empty:
-        st.info("Nenum material cadastrado na base de dados.")
+        st.info("Nenhum material cadastrado na base de dados.")
     else:
         c_filtro1, c_filtro2 = st.columns(2)
         with c_filtro1:
