@@ -35,7 +35,7 @@ def obter_engine():
 
 def validar_ncm(ncm):
     if not ncm or not ncm.strip():
-        return True  # NCM agora é opcional
+        return True
     padrao = r"^\d{4}\.\d{2}\.\d{2}$"
     return re.match(padrao, ncm.strip()) is not None
 
@@ -213,7 +213,7 @@ def inicializar_banco():
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
 
-        # Tabela Uso e Consumo (NCM não obrigatório)
+        # Tabela Uso e Consumo
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS uso_consumo (
                 id SERIAL PRIMARY KEY,
@@ -232,7 +232,6 @@ def inicializar_banco():
 
         conn.execute(text("""
             ALTER TABLE uso_consumo ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT TRUE;
-            ALTER TABLE uso_consumo ALTER COLUMN ncm DROP NOT NULL;
         """))
 
         conn.execute(text("""
@@ -451,11 +450,11 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: MATERIAL DE USO E CONSUMO
+# MÓDULO 2: MATERIAL DE USO E CONSUMO (SIMPLIFICADO - SEM NCM / CÓDIGOS)
 # =========================================================
 elif menu == "🧹 Material de Uso e Consumo":
     st.title("🧹 Material de Uso e Consumo")
-    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.). Todos são definidos automaticamente como CRÍTICOS.")
+    st.caption("Controle e cadastro simplificado de materiais consumíveis da empresa (fitas, estanho, pasta de solda, materiais de limpeza, etc.).")
 
     tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
         "📋 Lista & Estoque Atual",
@@ -465,9 +464,9 @@ elif menu == "🧹 Material de Uso e Consumo":
 
     engine = obter_engine()
 
-    # ABA 1: LISTA E BUSCA
+    # ABA 1: LISTA E BUSCA SIMPLIFICADA
     with tab_uc_lista:
-        df_uc = pd.read_sql("SELECT * FROM uso_consumo ORDER BY nome ASC", engine)
+        df_uc = pd.read_sql("SELECT id, nome, estante, prateleira, caixa, quanti, preco, critico FROM uso_consumo ORDER BY nome ASC", engine)
 
         if df_uc.empty:
             st.info("Nenhum material de uso e consumo cadastrado até o momento.")
@@ -481,67 +480,57 @@ elif menu == "🧹 Material de Uso e Consumo":
 
             st.divider()
 
-            busca_uc = st.text_input("🔍 Buscar Material por Nome, Código, Referência ou NCM:")
+            busca_uc = st.text_input("🔍 Buscar Material por Nome:")
             if busca_uc:
-                df_uc_exib = df_uc[
-                    df_uc['nome'].astype(str).str.contains(busca_uc, case=False, na=False) |
-                    df_uc['cod'].astype(str).str.contains(busca_uc, case=False, na=False) |
-                    df_uc['cod_ref'].astype(str).str.contains(busca_uc, case=False, na=False) |
-                    df_uc['ncm'].astype(str).str.contains(busca_uc, case=False, na=False)
-                ]
+                df_uc_exib = df_uc[df_uc['nome'].astype(str).str.contains(busca_uc, case=False, na=False)]
             else:
                 df_uc_exib = df_uc
 
             st.dataframe(df_uc_exib, use_container_width=True, hide_index=True)
 
-    # ABA 2: CADASTRO
+    # ABA 2: CADASTRO DIRETO (APENAS DADOS RELEVANTES)
     with tab_uc_cad:
         st.subheader("➕ Cadastrar Novo Material de Uso e Consumo")
         with st.form("form_cad_uso_consumo", clear_on_submit=True):
-            nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Stretch, Estanho 1mm, Pasta de Solda")
+            nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Stretch, Estanho 1mm, Detergente, etc.")
+            
             c1_uc, c2_uc = st.columns(2)
             with c1_uc:
-                cod_uc = st.text_input("Código Interno (Opcional):")
-                ref_uc = st.text_input("Código de Referência (Opcional):")
-                ncm_uc = st.text_input("NCM (Opcional - Formato XXXX.XX.XX):", placeholder="Ex: 3919.10.00")
                 preco_uc = st.number_input("Preço / Custo Estimado (R$):", min_value=0.0, step=0.01)
+                qtd_uc = st.number_input("Quantidade Inicial em Estoque:", min_value=0, step=1)
             with c2_uc:
                 estante_uc = st.text_input("Estante / Armário:")
                 prateleira_uc = st.text_input("Prateleira / Prat.:")
                 caixa_uc = st.text_input("Caixa / Posição:")
-                qtd_uc = st.number_input("Quantidade Inicial em Estoque:", min_value=0, step=1)
 
-            st.info("ℹ️ **Nota:** Material de uso e consumo é salvo automaticamente como **Item Crítico** para facilitar o acompanhamento diário de compras.")
+            st.info("ℹ️ **Nota:** Todo material de uso e consumo entra automaticamente como **Item Crítico** para acompanhamento direto nas solicitações de compras.")
 
             btn_salvar_uc = st.form_submit_button("💾 CADASTRAR MATERIAL DE CONSUMO")
 
             if btn_salvar_uc:
-                if not nome_uc:
+                if not nome_uc.strip():
                     st.warning("O campo Nome do Material é obrigatório!")
-                elif ncm_uc and not validar_ncm(ncm_uc):
-                    st.error("Formato do NCM inválido! Utilize o padrão XXXX.XX.XX ou deixe em branco.")
                 else:
-                    ncm_final = ncm_uc.strip() if ncm_uc else ""
-                    cod_final = cod_uc.strip() if cod_uc else ""
-                    ref_final = ref_uc.strip() if ref_uc else ""
-
                     with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO uso_consumo (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
-                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, TRUE)
+                            VALUES (:nome, '', '', '', :estante, :prateleira, :caixa, :quanti, :preco, TRUE)
                         """), {
-                            "nome": nome_uc.strip(), "cod": cod_final, "ref": ref_final, "ncm": ncm_final,
-                            "estante": estante_uc.strip(), "prateleira": prateleira_uc.strip(), "caixa": caixa_uc.strip(),
-                            "quanti": qtd_uc, "preco": preco_uc
+                            "nome": nome_uc.strip(),
+                            "estante": estante_uc.strip(), 
+                            "prateleira": prateleira_uc.strip(), 
+                            "caixa": caixa_uc.strip(),
+                            "quanti": qtd_uc, 
+                            "preco": preco_uc
                         })
-                    registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo (Crítico)")
+                    registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo")
                     st.cache_data.clear()
                     st.success(f"Material '{nome_uc}' cadastrado com sucesso!")
                     st.rerun()
 
     # ABA 3: EDIÇÃO E EXCLUSÃO
     with tab_uc_edit:
-        st.subheader("✍️️ Editar ou Excluir Material de Uso e Consumo")
+        st.subheader("✍ Editar ou Excluir Material de Uso e Consumo")
         df_uc_edit = pd.read_sql("SELECT * FROM uso_consumo ORDER BY nome ASC", engine)
 
         if df_uc_edit.empty:
@@ -551,17 +540,13 @@ elif menu == "🧹 Material de Uso e Consumo":
             df_uc_edit_filtrado = df_uc_edit.copy()
 
             if busca_edit_uc:
-                df_uc_edit_filtrado = df_uc_edit[
-                    df_uc_edit['nome'].astype(str).str.contains(busca_edit_uc, case=False, na=False) |
-                    df_uc_edit['cod'].astype(str).str.contains(busca_edit_uc, case=False, na=False) |
-                    df_uc_edit['cod_ref'].astype(str).str.contains(busca_edit_uc, case=False, na=False)
-                ]
+                df_uc_edit_filtrado = df_uc_edit[df_uc_edit['nome'].astype(str).str.contains(busca_edit_uc, case=False, na=False)]
 
             if df_uc_edit_filtrado.empty:
                 st.warning("Nenhum material encontrado.")
             else:
                 opcoes_uc = {
-                    f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (ID #{row['id']})": row['id']
+                    f"{row['nome']} (Qtd: {row['quanti']}) - ID #{row['id']}": row['id']
                     for _, row in df_uc_edit_filtrado.iterrows()
                 }
                 mat_uc_sel = st.selectbox("Selecione o material para editar:", list(opcoes_uc.keys()))
@@ -571,18 +556,16 @@ elif menu == "🧹 Material de Uso e Consumo":
 
                 with st.form(f"form_edicao_uc_{id_uc}"):
                     st.caption(f"✍️ Editando Item ID #{id_uc}")
-                    enome_uc = st.text_input("Nome", value=str(row_uc['nome']))
+                    enome_uc = st.text_input("Nome do Material", value=str(row_uc['nome']))
+                    
                     ec1_uc, ec2_uc = st.columns(2)
                     with ec1_uc:
-                        ecod_uc = st.text_input("Código Interno (Opcional)", value=str(row_uc['cod']) if row_uc['cod'] else "")
-                        eref_uc = st.text_input("Código de Referência (Opcional)", value=str(row_uc['cod_ref']) if row_uc['cod_ref'] else "")
-                        encm_uc = st.text_input("NCM (Opcional)", value=str(row_uc['ncm']) if row_uc['ncm'] else "")
                         epreco_uc = st.number_input("Preço (R$)", value=float(row_uc['preco']) if row_uc['preco'] else 0.0)
+                        eqtd_uc = st.number_input("Quantidade em Estoque", value=int(row_uc['quanti']) if row_uc['quanti'] else 0)
                     with ec2_uc:
                         eestante_uc = st.text_input("Estante / Armário", value=str(row_uc['estante']) if row_uc['estante'] else "")
                         eprat_uc = st.text_input("Prateleira", value=str(row_uc['prateleira']) if row_uc['prateleira'] else "")
                         ecaixa_uc = st.text_input("Caixa / Posição", value=str(row_uc['caixa']) if row_uc['caixa'] else "")
-                        eqtd_uc = st.number_input("Quantidade", value=int(row_uc['quanti']) if row_uc['quanti'] else 0)
 
                     val_critico_uc = bool(row_uc['critico']) if 'critico' in row_uc and pd.notna(row_uc['critico']) else True
                     ecritico_uc = st.checkbox("⚠️ Item Crítico (Prioridade Alta para Compras)", value=val_critico_uc)
@@ -594,23 +577,19 @@ elif menu == "🧹 Material de Uso e Consumo":
                         b_del_uc = st.form_submit_button("🗑️ Excluir Material", type="secondary")
 
                     if b_edit_uc:
-                        if encm_uc and not validar_ncm(encm_uc):
-                            st.error("Formato NCM inválido! Use XXXX.XX.XX ou deixe em branco.")
-                        else:
-                            with engine.begin() as conn:
-                                conn.execute(text("""
-                                    UPDATE uso_consumo 
-                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
-                                    WHERE id=:id
-                                """), {
-                                    "nome": enome_uc, "cod": ecod_uc, "ref": eref_uc, "ncm": encm_uc,
-                                    "est": eestante_uc, "prat": eprat_uc, "caixa": ecaixa_uc,
-                                    "qtd": eqtd_uc, "preco": epreco_uc, "critico": ecritico_uc, "id": id_uc
-                                })
-                            registrar_historico("EDICAO_USO_CONSUMO", enome_uc, eqtd_uc, f"ID #{id_uc} atualizado")
-                            st.cache_data.clear()
-                            st.success("Material de consumo atualizado com sucesso!")
-                            st.rerun()
+                        with engine.begin() as conn:
+                            conn.execute(text("""
+                                UPDATE uso_consumo 
+                                SET nome=:nome, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
+                                WHERE id=:id
+                            """), {
+                                "nome": enome_uc.strip(), "est": eestante_uc.strip(), "prat": eprat_uc.strip(), "caixa": ecaixa_uc.strip(),
+                                "qtd": eqtd_uc, "preco": epreco_uc, "critico": ecritico_uc, "id": id_uc
+                            })
+                        registrar_historico("EDICAO_USO_CONSUMO", enome_uc, eqtd_uc, f"ID #{id_uc} atualizado")
+                        st.cache_data.clear()
+                        st.success("Material de consumo atualizado com sucesso!")
+                        st.rerun()
 
                     if b_del_uc:
                         with engine.begin() as conn:
@@ -758,7 +737,7 @@ elif menu == "🧰 Ferramentas Especiais":
 # MÓDULO 4: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠 Gestão de Consertos":
-    st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
+    st.title("🛠️️ Gestão de Peças em Conserto / Manutenção")
     
     tab_cad, tab_coleta, tab_manut, tab_ret = st.tabs([
         "➕ 1. Cadastrar Manutenção",
@@ -924,7 +903,7 @@ elif menu == "📦 Movimentação de Estoque":
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenum material cadastrado para movimentar.")
+        st.warning("Nenhum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -1061,7 +1040,6 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
         if df_resultado.empty:
             st.success("Nenhum item atende aos critérios do filtro selecionado!")
         else:
-            # Tratamento visual para colunas que podem conter Nulos
             df_exib_res = df_resultado.copy()
             df_exib_res['cod'] = df_exib_res['cod'].fillna('N/A').replace('', 'N/A')
             df_exib_res['cod_ref'] = df_exib_res['cod_ref'].fillna('N/A').replace('', 'N/A')
