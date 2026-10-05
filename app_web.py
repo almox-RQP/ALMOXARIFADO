@@ -450,7 +450,7 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO 2: MATERIAL DE USO E CONSUMO (SIMPLIFICADO - SEM NCM / CÓDIGOS)
+# MÓDULO 2: MATERIAL DE USO E CONSUMO
 # =========================================================
 elif menu == "🧹 Material de Uso e Consumo":
     st.title("🧹 Material de Uso e Consumo")
@@ -459,7 +459,7 @@ elif menu == "🧹 Material de Uso e Consumo":
     tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
         "📋 Lista & Estoque Atual",
         "➕ Cadastrar Consumível",
-        "✍️ Editar / Excluir Material"
+        "✍️️ Editar / Excluir Material"
     ])
 
     engine = obter_engine()
@@ -488,7 +488,7 @@ elif menu == "🧹 Material de Uso e Consumo":
 
             st.dataframe(df_uc_exib, use_container_width=True, hide_index=True)
 
-    # ABA 2: CADASTRO DIRETO (APENAS DADOS RELEVANTES)
+    # ABA 2: CADASTRO DIRETO
     with tab_uc_cad:
         st.subheader("➕ Cadastrar Novo Material de Uso e Consumo")
         with st.form("form_cad_uso_consumo", clear_on_submit=True):
@@ -737,7 +737,7 @@ elif menu == "🧰 Ferramentas Especiais":
 # MÓDULO 4: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠 Gestão de Consertos":
-    st.title("🛠️️ Gestão de Peças em Conserto / Manutenção")
+    st.title("🛠 Gestão de Peças em Conserto / Manutenção")
     
     tab_cad, tab_coleta, tab_manut, tab_ret = st.tabs([
         "➕ 1. Cadastrar Manutenção",
@@ -894,18 +894,29 @@ elif menu == "🛠 Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 5: MOVIMENTAÇÃO DE ESTOQUE
+# MÓDULO 5: MOVIMENTAÇÃO DE ESTOQUE (INTEGRADO: ESTOQUE + USO E CONSUMO)
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
+    st.caption("Realize saídas e entradas tanto para Peças de Reposição quanto para Materiais de Uso e Consumo.")
     
     engine = obter_engine()
-    df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
+    
+    # Consulta unificada buscando os itens de ambas as tabelas
+    query_movimentacao = """
+        SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa, 'estoque' AS origem
+        FROM estoque
+        UNION ALL
+        SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa, 'uso_consumo' AS origem
+        FROM uso_consumo
+        ORDER BY nome ASC
+    """
+    df_estoque = pd.read_sql(query_movimentacao, engine)
 
     if df_estoque.empty:
-        st.warning("Nenhum material cadastrado para movimentar.")
+        st.warning("Nenhum material ou insumo cadastrado para movimentar.")
     else:
-        termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
+        termo_busca = st.text_input("🔍 Buscar Peça ou Insumo por Nome, Código Interno ou REF:")
         
         df_filtrado = df_estoque.copy()
         if termo_busca:
@@ -916,25 +927,31 @@ elif menu == "📦 Movimentação de Estoque":
             ]
         
         if df_filtrado.empty:
-            st.error("Nenhuma peça encontrada com o termo pesquisado.")
+            st.error("Nenhum item encontrado com o termo pesquisado.")
         else:
-            opcoes_mat = {
-                f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (Qtd: {row['quanti']}) - ID #{row['id']}": row['id'] 
-                for idx, row in df_filtrado.iterrows()
-            }
+            # Dicionário de seleção armazenando a tupla (id, origem)
+            opcoes_mat = {}
+            for idx, row in df_filtrado.iterrows():
+                tag_origem = "Peça Reposição" if row['origem'] == 'estoque' else "Uso e Consumo"
+                cod_str = row['cod'] if pd.notna(row['cod']) and str(row['cod']).strip() else 'N/A'
+                ref_str = row['cod_ref'] if pd.notna(row['cod_ref']) and str(row['cod_ref']).strip() else 'N/A'
+                
+                label = f"[{tag_origem}] {row['nome']} - Cód: {cod_str} | REF: {ref_str} (Qtd: {row['quanti']}) - ID #{row['id']}"
+                opcoes_mat[label] = (row['id'], row['origem'])
             
-            mat_sel = st.selectbox("Selecione o Material Desejado:", list(opcoes_mat.keys()))
-            mat_id = opcoes_mat[mat_sel]
+            mat_sel = st.selectbox("Selecione o Material / Insumo Desejado:", list(opcoes_mat.keys()))
+            mat_id, tabela_origem = opcoes_mat[mat_sel]
 
-            dados_peca = df_filtrado[df_filtrado['id'] == mat_id].iloc[0]
+            dados_peca = df_filtrado[(df_filtrado['id'] == mat_id) & (df_filtrado['origem'] == tabela_origem)].iloc[0]
 
             estante_info = dados_peca['estante'] if pd.notna(dados_peca['estante']) and dados_peca['estante'] else "Não Inf."
             prat_info = dados_peca['prateleira'] if pd.notna(dados_peca['prateleira']) and dados_peca['prateleira'] else "Não Inf."
             caixa_info = dados_peca['caixa'] if pd.notna(dados_peca['caixa']) and dados_peca['caixa'] else "Não Inf."
+            origem_label = "Peça de Reposição" if tabela_origem == 'estoque' else "Material de Uso e Consumo"
 
             st.info(f"""
-            📍 **Localização no Estoque:**  
-            * **Estante:** `{estante_info}` | **Prateleira:** `{prat_info}` | **Caixa/Posição:** `{caixa_info}`  
+            🏷️ **Origem do Item:** `{origem_label}`  
+            📍 **Localização no Estoque:** **Estante:** `{estante_info}` | **Prateleira:** `{prat_info}` | **Caixa/Posição:** `{caixa_info}`  
             📦 **Quantidade Atual Disponível:** `{int(dados_peca['quanti'])} unidades`
             """)
 
@@ -949,10 +966,12 @@ elif menu == "📦 Movimentação de Estoque":
 
             if st.button("🚀 Confirmar Movimentação", type="primary"):
                 with engine.begin() as conn:
-                    res_mat = conn.execute(text("SELECT nome, quanti FROM estoque WHERE id = :id"), {"id": mat_id}).fetchone()
+                    # Busca na tabela correspondente (estoque ou uso_consumo)
+                    query_busca = text(f"SELECT nome, quanti FROM {tabela_origem} WHERE id = :id")
+                    res_mat = conn.execute(query_busca, {"id": mat_id}).fetchone()
+                    
                     if res_mat:
                         nome_mat, qtd_atual = res_mat[0], res_mat[1]
-
                         is_saida = "SA" in tipo_opcao.upper()
 
                         if is_saida and qtd_mov > qtd_atual:
@@ -960,14 +979,15 @@ elif menu == "📦 Movimentação de Estoque":
                         else:
                             nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
                             
-                            conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": mat_id})
+                            # Atualização da quantidade na tabela correta
+                            query_update = text(f"UPDATE {tabela_origem} SET quanti = :qtd WHERE id = :id")
+                            conn.execute(query_update, {"qtd": nova_qtd, "id": mat_id})
                             
-                            tipo_str = "SAÍDA" if is_saida else "ENTRADA"
+                            tipo_str = f"SAÍDA ({origem_label})" if is_saida else f"ENTRADA ({origem_label})"
                             registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
                             
                             st.cache_data.clear()
-                            
-                            st.success(f"Movimentação de {tipo_str} realizada! Novo saldo: {nova_qtd}")
+                            st.success(f"Movimentação realizada com sucesso! Novo saldo: {nova_qtd}")
                             st.rerun()
 
 # =========================================================
