@@ -96,10 +96,11 @@ def gerar_pdf_compras(df_itens):
     story.append(Paragraph(f"Data de Emissão: {data_str} | Solicitante: {solicitante}", sub_style))
     story.append(Spacer(1, 15))
 
-    dados_tabela = [["Código / REF", "Descrição da Peça / Material", "NCM", "Est. Atual", "Status/Crítico"]]
+    dados_tabela = [["Origem / Cód / REF", "Descrição da Peça / Material", "NCM", "Est. Atual", "Status/Crítico"]]
     
     for _, row in df_itens.iterrows():
-        cod_ref_str = f"Cód: {row['cod'] if row['cod'] else 'N/A'}\nREF: {row['cod_ref'] if row['cod_ref'] else 'N/A'}"
+        origem_str = row.get('origem', 'Estoque')
+        cod_ref_str = f"[{origem_str}]\nCód: {row['cod'] if row['cod'] else 'N/A'}\nREF: {row['cod_ref'] if row['cod_ref'] else 'N/A'}"
         nome_str = str(row['nome'])
         ncm_str = str(row['ncm']) if row['ncm'] else 'N/A'
         qtd_str = str(int(row['quanti']))
@@ -113,7 +114,7 @@ def gerar_pdf_compras(df_itens):
             Paragraph(critico_str, body_style)
         ])
 
-    tabela = Table(dados_tabela, colWidths=[100, 240, 75, 55, 80])
+    tabela = Table(dados_tabela, colWidths=[110, 230, 75, 50, 80])
     tabela.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -209,7 +210,7 @@ def inicializar_banco():
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
 
-        # Nova Tabela para Uso e Consumo
+        # Tabela Uso e Consumo
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS uso_consumo (
                 id SERIAL PRIMARY KEY,
@@ -221,8 +222,13 @@ def inicializar_banco():
                 prateleira TEXT,
                 caixa TEXT,
                 quanti INTEGER DEFAULT 0,
-                preco REAL DEFAULT 0.0
+                preco REAL DEFAULT 0.0,
+                critico BOOLEAN DEFAULT TRUE
             )
+        """))
+
+        conn.execute(text("""
+            ALTER TABLE uso_consumo ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT TRUE;
         """))
 
         conn.execute(text("""
@@ -441,11 +447,11 @@ if menu == "📊 Visão Geral / Dashboard":
     st.dataframe(df_exibir, use_container_width=True)
 
 # =========================================================
-# MÓDULO NOVO: MATERIAL DE USO E CONSUMO
+# MÓDULO 2: MATERIAL DE USO E CONSUMO
 # =========================================================
 elif menu == "🧹 Material de Uso e Consumo":
     st.title("🧹 Material de Uso e Consumo")
-    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.).")
+    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.). Todos são categorizados automaticamente como CRÍTICOS para acompanhamento diário.")
 
     tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
         "📋 Lista & Estoque Atual",
@@ -488,7 +494,7 @@ elif menu == "🧹 Material de Uso e Consumo":
     with tab_uc_cad:
         st.subheader("➕ Cadastrar Novo Material de Uso e Consumo")
         with st.form("form_cad_uso_consumo", clear_on_submit=True):
-            nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Estanho 1mm, Pasta de Solda")
+            nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Stretch, Estanho 1mm, Pasta de Solda")
             c1_uc, c2_uc = st.columns(2)
             with c1_uc:
                 cod_uc = st.text_input("Código Interno:")
@@ -496,10 +502,12 @@ elif menu == "🧹 Material de Uso e Consumo":
                 ncm_uc = st.text_input("NCM (Formato XXXX.XX.XX) *", placeholder="Ex: 3919.10.00")
                 preco_uc = st.number_input("Preço / Custo Estimado (R$):", min_value=0.0, step=0.01)
             with c2_uc:
-                estante_uc = st.text_input("Estante:")
-                prateleira_uc = st.text_input("Prateleira:")
-                caixa_uc = st.text_input("Caixa / Posição / Armário:")
+                estante_uc = st.text_input("Estante / Armário:")
+                prateleira_uc = st.text_input("Prateleira / Prat.:")
+                caixa_uc = st.text_input("Caixa / Posição:")
                 qtd_uc = st.number_input("Quantidade Inicial em Estoque:", min_value=0, step=1)
+
+            st.info("ℹ️ **Nota:** Todo material de uso e consumo é automaticamente definido como **Item Crítico** para controle diário de reposição.")
 
             btn_salvar_uc = st.form_submit_button("💾 CADASTRAR MATERIAL DE CONSUMO")
 
@@ -513,16 +521,16 @@ elif menu == "🧹 Material de Uso e Consumo":
                 else:
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO uso_consumo (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco)
-                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco)
+                            INSERT INTO uso_consumo (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
+                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, TRUE)
                         """), {
                             "nome": nome_uc.strip(), "cod": cod_uc.strip(), "ref": ref_uc.strip(), "ncm": ncm_uc.strip(),
                             "estante": estante_uc.strip(), "prateleira": prateleira_uc.strip(), "caixa": caixa_uc.strip(),
                             "quanti": qtd_uc, "preco": preco_uc
                         })
-                    registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo")
+                    registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo (Crítico)")
                     st.cache_data.clear()
-                    st.success(f"Material '{nome_uc}' cadastrado com sucesso!")
+                    st.success(f"Material '{nome_uc}' cadastrado com sucesso como ITEM CRÍTICO!")
                     st.rerun()
 
     # ABA 3: EDIÇÃO E EXCLUSÃO
@@ -544,7 +552,7 @@ elif menu == "🧹 Material de Uso e Consumo":
                 ]
 
             if df_uc_edit_filtrado.empty:
-                st.warning("Nenhum material encontrado.")
+                st.warning("Nenum material encontrado.")
             else:
                 opcoes_uc = {
                     f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (ID #{row['id']})": row['id']
@@ -565,10 +573,13 @@ elif menu == "🧹 Material de Uso e Consumo":
                         encm_uc = st.text_input("NCM", value=str(row_uc['ncm']) if row_uc['ncm'] else "")
                         epreco_uc = st.number_input("Preço (R$)", value=float(row_uc['preco']) if row_uc['preco'] else 0.0)
                     with ec2_uc:
-                        eestante_uc = st.text_input("Estante", value=str(row_uc['estante']) if row_uc['estante'] else "")
+                        eestante_uc = st.text_input("Estante / Armário", value=str(row_uc['estante']) if row_uc['estante'] else "")
                         eprat_uc = st.text_input("Prateleira", value=str(row_uc['prateleira']) if row_uc['prateleira'] else "")
                         ecaixa_uc = st.text_input("Caixa / Posição", value=str(row_uc['caixa']) if row_uc['caixa'] else "")
                         eqtd_uc = st.number_input("Quantidade", value=int(row_uc['quanti']) if row_uc['quanti'] else 0)
+
+                    val_critico_uc = bool(row_uc['critico']) if 'critico' in row_uc and pd.notna(row_uc['critico']) else True
+                    ecritico_uc = st.checkbox("⚠️ Item Crítico (Prioridade Alta para Compras)", value=val_critico_uc)
 
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
@@ -583,12 +594,12 @@ elif menu == "🧹 Material de Uso e Consumo":
                             with engine.begin() as conn:
                                 conn.execute(text("""
                                     UPDATE uso_consumo 
-                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco
+                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco, critico=:critico
                                     WHERE id=:id
                                 """), {
                                     "nome": enome_uc, "cod": ecod_uc, "ref": eref_uc, "ncm": encm_uc,
                                     "est": eestante_uc, "prat": eprat_uc, "caixa": ecaixa_uc,
-                                    "qtd": eqtd_uc, "preco": epreco_uc, "id": id_uc
+                                    "qtd": eqtd_uc, "preco": epreco_uc, "critico": ecritico_uc, "id": id_uc
                                 })
                             registrar_historico("EDICAO_USO_CONSUMO", enome_uc, eqtd_uc, f"ID #{id_uc} atualizado")
                             st.cache_data.clear()
@@ -604,7 +615,7 @@ elif menu == "🧹 Material de Uso e Consumo":
                         st.rerun()
 
 # =========================================================
-# MÓDULO 2: FERRAMENTAS ESPECIAIS
+# MÓDULO 3: FERRAMENTAS ESPECIAIS
 # =========================================================
 elif menu == "🧰 Ferramentas Especiais":
     st.title("🧰 Controle de Inventário de Ferramentas Especiais")
@@ -738,7 +749,7 @@ elif menu == "🧰 Ferramentas Especiais":
                     st.rerun()
 
 # =========================================================
-# MÓDULO 3: GESTÃO DE CONSERTOS
+# MÓDULO 4: GESTÃO DE CONSERTOS
 # =========================================================
 elif menu == "🛠 Gestão de Consertos":
     st.title("🛠️ Gestão de Peças em Conserto / Manutenção")
@@ -898,7 +909,7 @@ elif menu == "🛠 Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 4: MOVIMENTAÇÃO DE ESTOQUE
+# MÓDULO 5: MOVIMENTAÇÃO DE ESTOQUE
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
@@ -975,27 +986,37 @@ elif menu == "📦 Movimentação de Estoque":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 5: PEÇAS CRÍTICAS E POUCO ESTOQUE
+# MÓDULO 6: PEÇAS CRÍTICAS E POUCO ESTOQUE (INTEGRADO ESTOQUE + USOS E CONSUMO)
 # =========================================================
 elif menu == "🚨 Peças Críticas e Pouco Estoque":
-    st.title("🚨 Monitoramento de Peças Importantes e Baixo Estoque")
-    st.caption("Acompanhe peças marcadas como prioritárias ou com nível de saldo abaixo do limite de segurança.")
+    st.title("🚨 Monitoramento de Peças e Consumíveis Críticos")
+    st.caption("Visão consolidada de Peças de Reposição e Materiais de Uso e Consumo para envio ao Setor de Compras.")
     
     engine = obter_engine()
-    df_bc = pd.read_sql("SELECT * FROM estoque ORDER BY quanti ASC, nome ASC", engine)
+    
+    # Consulta unificada das duas tabelas com identificação da Origem
+    query_unificada = """
+        SELECT id, nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico, 'Peças / Peças Reposição' AS origem
+        FROM estoque
+        UNION ALL
+        SELECT id, nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico, 'Uso e Consumo' AS origem
+        FROM uso_consumo
+        ORDER BY quanti ASC, nome ASC
+    """
+    df_bc = pd.read_sql(query_unificada, engine)
 
     if df_bc.empty:
-        st.info("Nenum material cadastrado na base de dados.")
+        st.info("Nenhum material cadastrado na base de dados.")
     else:
         c_filtro1, c_filtro2 = st.columns(2)
         with c_filtro1:
             limite_qtd = st.number_input("Definir limite para 'Pouco Estoque' (menor ou igual a):", min_value=0, value=3, step=1)
         with c_filtro2:
             modo_view = st.selectbox("Filtrar Exibição:", [
-                "🔥 Peças Críticas COM Pouco Estoque (Prioridade Máxima)",
-                "⚠️ Apenas Peças com Pouco Estoque",
-                "🚨 Apenas Peças Marcadas como Críticas (Qualquer quantidade)",
-                "📋 Todas as Peças (Ordenadas por menor quantidade)"
+                "🔥 Itens Críticos COM Pouco Estoque (Prioridade Máxima)",
+                "⚠️ Apenas Itens com Pouco Estoque",
+                "🚨 Apenas Itens Marcados como Críticos (Qualquer quantidade)",
+                "📋 Todos os Itens (Ordenados por menor quantidade)"
             ])
 
         if "Prioridade Máxima" in modo_view:
@@ -1007,7 +1028,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
         else:
             df_resultado = df_bc
 
-        st.metric("Total de Peças Encontradas na Consulta", len(df_resultado))
+        st.metric("Total de Itens Encontrados na Consulta", len(df_resultado))
         
         if not df_resultado.empty:
             c_btn1, c_btn2 = st.columns(2)
@@ -1024,7 +1045,7 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
             csv_data = df_resultado.to_csv(index=False).encode('utf-8-sig')
             with c_btn2:
                 st.download_button(
-                    label="📊 Baixar Tabela em Excel (CSV)",
+                    label="📊 Baixar Tabela Completa para Compras (CSV / Excel)",
                     data=csv_data,
                     file_name=f"lista_compras_{datetime.now().strftime('%d_%m_%Y')}.csv",
                     mime="text/csv"
@@ -1033,16 +1054,16 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
         st.divider()
 
         if df_resultado.empty:
-            st.success("Nenhuma peça atende aos critérios do filtro selecionado!")
+            st.success("Nenhum item atende aos critérios do filtro selecionado!")
         else:
             st.dataframe(
-                df_resultado[['id', 'nome', 'cod', 'cod_ref', 'quanti', 'critico', 'estante', 'prateleira', 'caixa', 'ncm']],
+                df_resultado[['origem', 'nome', 'cod', 'cod_ref', 'quanti', 'critico', 'estante', 'prateleira', 'caixa', 'ncm']],
                 use_container_width=True,
                 hide_index=True
             )
 
 # =========================================================
-# MÓDULO 6: CADASTRO E EDIÇÃO DE PEÇAS
+# MÓDULO 7: CADASTRO E EDIÇÃO DE PEÇAS
 # =========================================================
 elif menu == "➕ Cadastrar / Editar Peças":
     st.title("➕ Gestão de Peças e Materiais")
@@ -1206,7 +1227,7 @@ elif menu == "➕ Cadastrar / Editar Peças":
                             st.rerun()
 
 # =========================================================
-# MÓDULO 7: HISTÓRICO (LOGS)
+# MÓDULO 8: HISTÓRICO (LOGS)
 # =========================================================
 elif menu == "📜 Histórico (Logs)":
     st.title("📜 Histórico de Movimentações e Logs")
