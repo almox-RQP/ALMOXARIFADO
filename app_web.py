@@ -209,6 +209,22 @@ def inicializar_banco():
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
 
+        # Nova Tabela para Uso e Consumo
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS uso_consumo (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                cod TEXT,
+                cod_ref TEXT,
+                ncm TEXT NOT NULL,
+                estante TEXT,
+                prateleira TEXT,
+                caixa TEXT,
+                quanti INTEGER DEFAULT 0,
+                preco REAL DEFAULT 0.0
+            )
+        """))
+
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS consertos (
                 id SERIAL PRIMARY KEY,
@@ -319,6 +335,7 @@ menu = st.sidebar.radio(
     "Navegação do Sistema:",
     [
         "📊 Visão Geral / Dashboard",
+        "🧹 Material de Uso e Consumo",
         "🧰 Ferramentas Especiais",
         "🛠 Gestão de Consertos",
         "📦 Movimentação de Estoque",
@@ -422,6 +439,169 @@ if menu == "📊 Visão Geral / Dashboard":
         df_exibir = df_est
 
     st.dataframe(df_exibir, use_container_width=True)
+
+# =========================================================
+# MÓDULO NOVO: MATERIAL DE USO E CONSUMO
+# =========================================================
+elif menu == "🧹 Material de Uso e Consumo":
+    st.title("🧹 Material de Uso e Consumo")
+    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.).")
+
+    tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
+        "📋 Lista & Estoque Atual",
+        "➕ Cadastrar Consumível",
+        "✍️ Editar / Excluir Material"
+    ])
+
+    engine = obter_engine()
+
+    # ABA 1: LISTA E BUSCA
+    with tab_uc_lista:
+        df_uc = pd.read_sql("SELECT * FROM uso_consumo ORDER BY nome ASC", engine)
+
+        if df_uc.empty:
+            st.info("Nenhum material de uso e consumo cadastrado até o momento.")
+        else:
+            uc_m1, uc_m2, uc_m3 = st.columns(3)
+            uc_m1.metric("Total de Consumíveis", len(df_uc))
+            qtd_uc = df_uc['quanti'].sum() if 'quanti' in df_uc.columns else 0
+            uc_m2.metric("Total de Unidades/Pacotes", int(qtd_uc))
+            val_uc = (df_uc['quanti'] * df_uc['preco']).sum() if ('quanti' in df_uc.columns and 'preco' in df_uc.columns) else 0.0
+            uc_m3.metric("Valor Total Armazenado", f"R$ {val_uc:,.2f}")
+
+            st.divider()
+
+            busca_uc = st.text_input("🔍 Buscar Material por Nome, Código, Referência ou NCM:")
+            if busca_uc:
+                df_uc_exib = df_uc[
+                    df_uc['nome'].astype(str).str.contains(busca_uc, case=False, na=False) |
+                    df_uc['cod'].astype(str).str.contains(busca_uc, case=False, na=False) |
+                    df_uc['cod_ref'].astype(str).str.contains(busca_uc, case=False, na=False) |
+                    df_uc['ncm'].astype(str).str.contains(busca_uc, case=False, na=False)
+                ]
+            else:
+                df_uc_exib = df_uc
+
+            st.dataframe(df_uc_exib, use_container_width=True, hide_index=True)
+
+    # ABA 2: CADASTRO
+    with tab_uc_cad:
+        st.subheader("➕ Cadastrar Novo Material de Uso e Consumo")
+        with st.form("form_cad_uso_consumo", clear_on_submit=True):
+            nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Estanho 1mm, Pasta de Solda")
+            c1_uc, c2_uc = st.columns(2)
+            with c1_uc:
+                cod_uc = st.text_input("Código Interno:")
+                ref_uc = st.text_input("Código de Referência:")
+                ncm_uc = st.text_input("NCM (Formato XXXX.XX.XX) *", placeholder="Ex: 3919.10.00")
+                preco_uc = st.number_input("Preço / Custo Estimado (R$):", min_value=0.0, step=0.01)
+            with c2_uc:
+                estante_uc = st.text_input("Estante:")
+                prateleira_uc = st.text_input("Prateleira:")
+                caixa_uc = st.text_input("Caixa / Posição / Armário:")
+                qtd_uc = st.number_input("Quantidade Inicial em Estoque:", min_value=0, step=1)
+
+            btn_salvar_uc = st.form_submit_button("💾 CADASTRAR MATERIAL DE CONSUMO")
+
+            if btn_salvar_uc:
+                if not nome_uc:
+                    st.warning("O campo Nome do Material é obrigatório!")
+                elif not ncm_uc:
+                    st.error("O campo NCM é obrigatório!")
+                elif not validar_ncm(ncm_uc):
+                    st.error("Formato do NCM inválido! Utilize XXXX.XX.XX")
+                else:
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            INSERT INTO uso_consumo (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco)
+                            VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco)
+                        """), {
+                            "nome": nome_uc.strip(), "cod": cod_uc.strip(), "ref": ref_uc.strip(), "ncm": ncm_uc.strip(),
+                            "estante": estante_uc.strip(), "prateleira": prateleira_uc.strip(), "caixa": caixa_uc.strip(),
+                            "quanti": qtd_uc, "preco": preco_uc
+                        })
+                    registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo")
+                    st.cache_data.clear()
+                    st.success(f"Material '{nome_uc}' cadastrado com sucesso!")
+                    st.rerun()
+
+    # ABA 3: EDIÇÃO E EXCLUSÃO
+    with tab_uc_edit:
+        st.subheader("✍️ Editar ou Excluir Material de Uso e Consumo")
+        df_uc_edit = pd.read_sql("SELECT * FROM uso_consumo ORDER BY nome ASC", engine)
+
+        if df_uc_edit.empty:
+            st.info("Nenhum material de consumo para editar.")
+        else:
+            busca_edit_uc = st.text_input("🔍 Pesquisar Material para Edição:")
+            df_uc_edit_filtrado = df_uc_edit.copy()
+
+            if busca_edit_uc:
+                df_uc_edit_filtrado = df_uc_edit[
+                    df_uc_edit['nome'].astype(str).str.contains(busca_edit_uc, case=False, na=False) |
+                    df_uc_edit['cod'].astype(str).str.contains(busca_edit_uc, case=False, na=False) |
+                    df_uc_edit['cod_ref'].astype(str).str.contains(busca_edit_uc, case=False, na=False)
+                ]
+
+            if df_uc_edit_filtrado.empty:
+                st.warning("Nenhum material encontrado.")
+            else:
+                opcoes_uc = {
+                    f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (ID #{row['id']})": row['id']
+                    for _, row in df_uc_edit_filtrado.iterrows()
+                }
+                mat_uc_sel = st.selectbox("Selecione o material para editar:", list(opcoes_uc.keys()))
+                id_uc = opcoes_uc[mat_uc_sel]
+
+                row_uc = df_uc_edit[df_uc_edit['id'] == id_uc].iloc[0]
+
+                with st.form(f"form_edicao_uc_{id_uc}"):
+                    st.caption(f"✍️ Editando Item ID #{id_uc}")
+                    enome_uc = st.text_input("Nome", value=str(row_uc['nome']))
+                    ec1_uc, ec2_uc = st.columns(2)
+                    with ec1_uc:
+                        ecod_uc = st.text_input("Código Interno", value=str(row_uc['cod']) if row_uc['cod'] else "")
+                        eref_uc = st.text_input("Código de Referência", value=str(row_uc['cod_ref']) if row_uc['cod_ref'] else "")
+                        encm_uc = st.text_input("NCM", value=str(row_uc['ncm']) if row_uc['ncm'] else "")
+                        epreco_uc = st.number_input("Preço (R$)", value=float(row_uc['preco']) if row_uc['preco'] else 0.0)
+                    with ec2_uc:
+                        eestante_uc = st.text_input("Estante", value=str(row_uc['estante']) if row_uc['estante'] else "")
+                        eprat_uc = st.text_input("Prateleira", value=str(row_uc['prateleira']) if row_uc['prateleira'] else "")
+                        ecaixa_uc = st.text_input("Caixa / Posição", value=str(row_uc['caixa']) if row_uc['caixa'] else "")
+                        eqtd_uc = st.number_input("Quantidade", value=int(row_uc['quanti']) if row_uc['quanti'] else 0)
+
+                    col_b1, col_b2 = st.columns(2)
+                    with col_b1:
+                        b_edit_uc = st.form_submit_button("💾 Salvar Alterações", type="primary")
+                    with col_b2:
+                        b_del_uc = st.form_submit_button("🗑️ Excluir Material", type="secondary")
+
+                    if b_edit_uc:
+                        if not validar_ncm(encm_uc):
+                            st.error("Formato NCM inválido! Use XXXX.XX.XX")
+                        else:
+                            with engine.begin() as conn:
+                                conn.execute(text("""
+                                    UPDATE uso_consumo 
+                                    SET nome=:nome, cod=:cod, cod_ref=:ref, ncm=:ncm, estante=:est, prateleira=:prat, caixa=:caixa, quanti=:qtd, preco=:preco
+                                    WHERE id=:id
+                                """), {
+                                    "nome": enome_uc, "cod": ecod_uc, "ref": eref_uc, "ncm": encm_uc,
+                                    "est": eestante_uc, "prat": eprat_uc, "caixa": ecaixa_uc,
+                                    "qtd": eqtd_uc, "preco": epreco_uc, "id": id_uc
+                                })
+                            registrar_historico("EDICAO_USO_CONSUMO", enome_uc, eqtd_uc, f"ID #{id_uc} atualizado")
+                            st.cache_data.clear()
+                            st.success("Material de consumo atualizado com sucesso!")
+                            st.rerun()
+
+                    if b_del_uc:
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM uso_consumo WHERE id=:id"), {"id": id_uc})
+                        registrar_historico("EXCLUSAO_USO_CONSUMO", enome_uc, 0, f"ID #{id_uc} excluído")
+                        st.cache_data.clear()
+                        st.success("Material excluído com sucesso!")
+                        st.rerun()
 
 # =========================================================
 # MÓDULO 2: FERRAMENTAS ESPECIAIS
@@ -659,7 +839,7 @@ elif menu == "🛠 Gestão de Consertos":
                 st.divider()
 
     with tab_manut:
-        st.subheader("🛠️️ Peças em Manutenção na Oficina")
+        st.subheader("🛠 Peças em Manutenção na Oficina")
         engine = obter_engine()
         df_manut = pd.read_sql("SELECT * FROM consertos WHERE status = 'Em Conserto' OR status IS NULL ORDER BY id DESC", engine)
 
@@ -772,7 +952,6 @@ elif menu == "📦 Movimentação de Estoque":
                 obs_mov = st.text_area("Observação / Destino / Motivo:")
 
             if st.button("🚀 Confirmar Movimentação", type="primary"):
-                # Usando engine.begin() para criar a transação e garantir o COMMIT no Supabase
                 with engine.begin() as conn:
                     res_mat = conn.execute(text("SELECT nome, quanti FROM estoque WHERE id = :id"), {"id": mat_id}).fetchone()
                     if res_mat:
@@ -785,13 +964,11 @@ elif menu == "📦 Movimentação de Estoque":
                         else:
                             nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
                             
-                            # Atualiza o banco de dados dentro do bloco gerenciado (com commit automático)
                             conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": mat_id})
                             
                             tipo_str = "SAÍDA" if is_saida else "ENTRADA"
                             registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
                             
-                            # Limpa o cache do Streamlit para forçar a atualização imediata da interface
                             st.cache_data.clear()
                             
                             st.success(f"Movimentação de {tipo_str} realizada! Novo saldo: {nova_qtd}")
