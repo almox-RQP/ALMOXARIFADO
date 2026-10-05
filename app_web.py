@@ -107,7 +107,7 @@ def gerar_pdf_compras(df_itens):
         nome_str = str(row['nome'])
         ncm_str = str(row['ncm']).strip() if pd.notna(row['ncm']) and str(row['ncm']).strip() else 'N/A'
         qtd_str = str(int(row['quanti']))
-        critico_str = "🚨 CRÍTICO" if row['critico'] else "⚠️ Baixo Estoque"
+        critico_str = "🚨 CRÍTICO" if row['critico'] else "⚠️️ Baixo Estoque"
 
         dados_tabela.append([
             Paragraph(cod_ref_str, body_style),
@@ -459,7 +459,7 @@ elif menu == "🧹 Material de Uso e Consumo":
     tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
         "📋 Lista & Estoque Atual",
         "➕ Cadastrar Consumível",
-        "✍️️ Editar / Excluir Material"
+        "✍ Editar / Excluir Material"
     ])
 
     engine = obter_engine()
@@ -568,7 +568,7 @@ elif menu == "🧹 Material de Uso e Consumo":
                         ecaixa_uc = st.text_input("Caixa / Posição", value=str(row_uc['caixa']) if row_uc['caixa'] else "")
 
                     val_critico_uc = bool(row_uc['critico']) if 'critico' in row_uc and pd.notna(row_uc['critico']) else True
-                    ecritico_uc = st.checkbox("⚠️ Item Crítico (Prioridade Alta para Compras)", value=val_critico_uc)
+                    ecritico_uc = st.checkbox("⚠️️ Item Crítico (Prioridade Alta para Compras)", value=val_critico_uc)
 
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
@@ -894,101 +894,158 @@ elif menu == "🛠 Gestão de Consertos":
             st.dataframe(df_ret, use_container_width=True)
 
 # =========================================================
-# MÓDULO 5: MOVIMENTAÇÃO DE ESTOQUE (INTEGRADO: ESTOQUE + USO E CONSUMO)
+# MÓDULO 5: MOVIMENTAÇÃO DE ESTOQUE (COM ABAS SEPARADAS)
 # =========================================================
 elif menu == "📦 Movimentação de Estoque":
     st.title("📦 Movimentação de Entrada e Saída de Materiais")
-    st.caption("Realize saídas e entradas tanto para Peças de Reposição quanto para Materiais de Uso e Consumo.")
+    st.caption("Selecione a aba desejada para registrar saídas ou entradas de materiais.")
     
     engine = obter_engine()
-    
-    # Consulta unificada buscando os itens de ambas as tabelas
-    query_movimentacao = """
-        SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa, 'estoque' AS origem
-        FROM estoque
-        UNION ALL
-        SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa, 'uso_consumo' AS origem
-        FROM uso_consumo
-        ORDER BY nome ASC
-    """
-    df_estoque = pd.read_sql(query_movimentacao, engine)
 
-    if df_estoque.empty:
-        st.warning("Nenhum material ou insumo cadastrado para movimentar.")
-    else:
-        termo_busca = st.text_input("🔍 Buscar Peça ou Insumo por Nome, Código Interno ou REF:")
-        
-        df_filtrado = df_estoque.copy()
-        if termo_busca:
-            df_filtrado = df_estoque[
-                df_estoque['nome'].astype(str).str.contains(termo_busca, case=False, na=False) |
-                df_estoque['cod'].astype(str).str.contains(termo_busca, case=False, na=False) |
-                df_estoque['cod_ref'].astype(str).str.contains(termo_busca, case=False, na=False)
-            ]
-        
-        if df_filtrado.empty:
-            st.error("Nenhum item encontrado com o termo pesquisado.")
+    tab_mov_pecas, tab_mov_consumo = st.tabs([
+        "📦 Peças de Reposição (Estoque)",
+        "🧹 Materiais de Uso e Consumo"
+    ])
+
+    # ---------------------------------------------------------
+    # ABA 1: PEÇAS DE REPOSIÇÃO
+    # ---------------------------------------------------------
+    with tab_mov_pecas:
+        df_pecas = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
+
+        if df_pecas.empty:
+            st.warning("Nenhuma peça de reposição cadastrada para movimentar.")
         else:
-            # Dicionário de seleção armazenando a tupla (id, origem)
-            opcoes_mat = {}
-            for idx, row in df_filtrado.iterrows():
-                tag_origem = "Peça Reposição" if row['origem'] == 'estoque' else "Uso e Consumo"
-                cod_str = row['cod'] if pd.notna(row['cod']) and str(row['cod']).strip() else 'N/A'
-                ref_str = row['cod_ref'] if pd.notna(row['cod_ref']) and str(row['cod_ref']).strip() else 'N/A'
-                
-                label = f"[{tag_origem}] {row['nome']} - Cód: {cod_str} | REF: {ref_str} (Qtd: {row['quanti']}) - ID #{row['id']}"
-                opcoes_mat[label] = (row['id'], row['origem'])
+            termo_p = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou REF:", key="busca_mov_p")
             
-            mat_sel = st.selectbox("Selecione o Material / Insumo Desejado:", list(opcoes_mat.keys()))
-            mat_id, tabela_origem = opcoes_mat[mat_sel]
+            df_p_filtrado = df_pecas.copy()
+            if termo_p:
+                df_p_filtrado = df_pecas[
+                    df_pecas['nome'].astype(str).str.contains(termo_p, case=False, na=False) |
+                    df_pecas['cod'].astype(str).str.contains(termo_p, case=False, na=False) |
+                    df_pecas['cod_ref'].astype(str).str.contains(termo_p, case=False, na=False)
+                ]
+            
+            if df_p_filtrado.empty:
+                st.error("Nenhuma peça encontrada com o termo pesquisado.")
+            else:
+                opcoes_p = {}
+                for idx, row in df_p_filtrado.iterrows():
+                    cod_str = row['cod'] if pd.notna(row['cod']) and str(row['cod']).strip() else 'N/A'
+                    ref_str = row['cod_ref'] if pd.notna(row['cod_ref']) and str(row['cod_ref']).strip() else 'N/A'
+                    label = f"{row['nome']} - Cód: {cod_str} | REF: {ref_str} (Qtd Atual: {row['quanti']}) - ID #{row['id']}"
+                    opcoes_p[label] = row['id']
+                
+                sel_p = st.selectbox("Selecione a Peça Desejada:", list(opcoes_p.keys()), key="sel_peca_mov")
+                peca_id = opcoes_p[sel_p]
 
-            dados_peca = df_filtrado[(df_filtrado['id'] == mat_id) & (df_filtrado['origem'] == tabela_origem)].iloc[0]
+                dados_p = df_p_filtrado[df_p_filtrado['id'] == peca_id].iloc[0]
 
-            estante_info = dados_peca['estante'] if pd.notna(dados_peca['estante']) and dados_peca['estante'] else "Não Inf."
-            prat_info = dados_peca['prateleira'] if pd.notna(dados_peca['prateleira']) and dados_peca['prateleira'] else "Não Inf."
-            caixa_info = dados_peca['caixa'] if pd.notna(dados_peca['caixa']) and dados_peca['caixa'] else "Não Inf."
-            origem_label = "Peça de Reposição" if tabela_origem == 'estoque' else "Material de Uso e Consumo"
+                estante_info = dados_p['estante'] if pd.notna(dados_p['estante']) and dados_p['estante'] else "Não Inf."
+                prat_info = dados_p['prateleira'] if pd.notna(dados_p['prateleira']) and dados_p['prateleira'] else "Não Inf."
+                caixa_info = dados_p['caixa'] if pd.notna(dados_p['caixa']) and dados_p['caixa'] else "Não Inf."
 
-            st.info(f"""
-            🏷️ **Origem do Item:** `{origem_label}`  
-            📍 **Localização no Estoque:** **Estante:** `{estante_info}` | **Prateleira:** `{prat_info}` | **Caixa/Posição:** `{caixa_info}`  
-            📦 **Quantidade Atual Disponível:** `{int(dados_peca['quanti'])} unidades`
-            """)
+                st.info(f"""
+                🏷️ **Item:** `{dados_p['nome']}`  
+                📍 **Localização:** **Estante:** `{estante_info}` | **Prateleira:** `{prat_info}` | **Caixa/Posição:** `{caixa_info}`  
+                📦 **Quantidade Atual Disponível:** `{int(dados_p['quanti'])} unidades`
+                """)
 
-            st.divider()
+                st.divider()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                tipo_opcao = st.radio("Tipo de Movimentação:", ["SAÍDA (Remover)", "ENTRADA (Adicionar)"])
-                qtd_mov = st.number_input("Quantidade:", min_value=1, step=1)
-            with col2:
-                obs_mov = st.text_area("Observação / Destino / Motivo:")
+                cp1, cp2 = st.columns(2)
+                with cp1:
+                    tipo_opcao_p = st.radio("Tipo de Movimentação:", ["SAÍDA (Remover)", "ENTRADA (Adicionar)"], key="radio_p")
+                    qtd_mov_p = st.number_input("Quantidade:", min_value=1, step=1, key="qtd_p")
+                with cp2:
+                    obs_mov_p = st.text_area("Observação / Destino / Motivo:", key="obs_p")
 
-            if st.button("🚀 Confirmar Movimentação", type="primary"):
-                with engine.begin() as conn:
-                    # Busca na tabela correspondente (estoque ou uso_consumo)
-                    query_busca = text(f"SELECT nome, quanti FROM {tabela_origem} WHERE id = :id")
-                    res_mat = conn.execute(query_busca, {"id": mat_id}).fetchone()
-                    
-                    if res_mat:
-                        nome_mat, qtd_atual = res_mat[0], res_mat[1]
-                        is_saida = "SA" in tipo_opcao.upper()
+                if st.button("🚀 Confirmar Movimentação de Peça", type="primary", key="btn_mov_p"):
+                    with engine.begin() as conn:
+                        res = conn.execute(text("SELECT nome, quanti FROM estoque WHERE id = :id"), {"id": peca_id}).fetchone()
+                        if res:
+                            nome_mat, qtd_atual = res[0], res[1]
+                            is_saida = "SA" in tipo_opcao_p.upper()
 
-                        if is_saida and qtd_mov > qtd_atual:
-                            st.error(f"Erro: Quantidade de saída ({qtd_mov}) é maior do que o estoque disponível ({qtd_atual})!")
-                        else:
-                            nova_qtd = (qtd_atual - qtd_mov) if is_saida else (qtd_atual + qtd_mov)
-                            
-                            # Atualização da quantidade na tabela correta
-                            query_update = text(f"UPDATE {tabela_origem} SET quanti = :qtd WHERE id = :id")
-                            conn.execute(query_update, {"qtd": nova_qtd, "id": mat_id})
-                            
-                            tipo_str = f"SAÍDA ({origem_label})" if is_saida else f"ENTRADA ({origem_label})"
-                            registrar_historico(tipo_str, nome_mat, qtd_mov, obs_mov)
-                            
-                            st.cache_data.clear()
-                            st.success(f"Movimentação realizada com sucesso! Novo saldo: {nova_qtd}")
-                            st.rerun()
+                            if is_saida and qtd_mov_p > qtd_atual:
+                                st.error(f"Erro: Quantidade de saída ({qtd_mov_p}) é maior do que o estoque disponível ({qtd_atual})!")
+                            else:
+                                nova_qtd = (qtd_atual - qtd_mov_p) if is_saida else (qtd_atual + qtd_mov_p)
+                                conn.execute(text("UPDATE estoque SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": peca_id})
+                                
+                                tipo_str = "SAÍDA (Peça Reposição)" if is_saida else "ENTRADA (Peça Reposição)"
+                                registrar_historico(tipo_str, nome_mat, qtd_mov_p, obs_mov_p)
+                                
+                                st.cache_data.clear()
+                                st.success(f"Movimentação realizada com sucesso! Novo saldo: {nova_qtd}")
+                                st.rerun()
+
+    # ---------------------------------------------------------
+    # ABA 2: MATERIAIS DE USO E CONSUMO
+    # ---------------------------------------------------------
+    with tab_mov_consumo:
+        df_uc = pd.read_sql("SELECT id, nome, quanti, estante, prateleira, caixa FROM uso_consumo ORDER BY nome ASC", engine)
+
+        if df_uc.empty:
+            st.warning("Nenhum material de uso e consumo cadastrado para movimentar.")
+        else:
+            termo_uc = st.text_input("🔍 Buscar Material por Nome:", key="busca_mov_uc")
+            
+            df_uc_filtrado = df_uc.copy()
+            if termo_uc:
+                df_uc_filtrado = df_uc[df_uc['nome'].astype(str).str.contains(termo_uc, case=False, na=False)]
+            
+            if df_uc_filtrado.empty:
+                st.error("Nenhum material de consumo encontrado.")
+            else:
+                opcoes_uc = {}
+                for idx, row in df_uc_filtrado.iterrows():
+                    label = f"{row['nome']} (Qtd Atual: {row['quanti']}) - ID #{row['id']}"
+                    opcoes_uc[label] = row['id']
+                
+                sel_uc = st.selectbox("Selecione o Material de Consumo:", list(opcoes_uc.keys()), key="sel_uc_mov")
+                uc_id = opcoes_uc[sel_uc]
+
+                dados_uc = df_uc_filtrado[df_uc_filtrado['id'] == uc_id].iloc[0]
+
+                estante_uc = dados_uc['estante'] if pd.notna(dados_uc['estante']) and dados_uc['estante'] else "Não Inf."
+                prat_uc = dados_uc['prateleira'] if pd.notna(dados_uc['prateleira']) and dados_uc['prateleira'] else "Não Inf."
+                caixa_uc = dados_uc['caixa'] if pd.notna(dados_uc['caixa']) and dados_uc['caixa'] else "Não Inf."
+
+                st.info(f"""
+                🏷️ **Material:** `{dados_uc['nome']}`  
+                📍 **Localização:** **Estante:** `{estante_uc}` | **Prateleira:** `{prat_uc}` | **Caixa/Posição:** `{caixa_uc}`  
+                📦 **Quantidade Atual Disponível:** `{int(dados_uc['quanti'])} unidades`
+                """)
+
+                st.divider()
+
+                cuc1, cuc2 = st.columns(2)
+                with cuc1:
+                    tipo_opcao_uc = st.radio("Tipo de Movimentação:", ["SAÍDA (Remover)", "ENTRADA (Adicionar)"], key="radio_uc")
+                    qtd_mov_uc = st.number_input("Quantidade:", min_value=1, step=1, key="qtd_uc")
+                with cuc2:
+                    obs_mov_uc = st.text_area("Observação / Destino / Motivo:", key="obs_uc")
+
+                if st.button("🚀 Confirmar Movimentação de Consumível", type="primary", key="btn_mov_uc"):
+                    with engine.begin() as conn:
+                        res = conn.execute(text("SELECT nome, quanti FROM uso_consumo WHERE id = :id"), {"id": uc_id}).fetchone()
+                        if res:
+                            nome_mat, qtd_atual = res[0], res[1]
+                            is_saida = "SA" in tipo_opcao_uc.upper()
+
+                            if is_saida and qtd_mov_uc > qtd_atual:
+                                st.error(f"Erro: Quantidade de saída ({qtd_mov_uc}) é maior do que o estoque disponível ({qtd_atual})!")
+                            else:
+                                nova_qtd = (qtd_atual - qtd_mov_uc) if is_saida else (qtd_atual + qtd_mov_uc)
+                                conn.execute(text("UPDATE uso_consumo SET quanti = :qtd WHERE id = :id"), {"qtd": nova_qtd, "id": uc_id})
+                                
+                                tipo_str = "SAÍDA (Uso e Consumo)" if is_saida else "ENTRADA (Uso e Consumo)"
+                                registrar_historico(tipo_str, nome_mat, qtd_mov_uc, obs_mov_uc)
+                                
+                                st.cache_data.clear()
+                                st.success(f"Movimentação realizada com sucesso! Novo saldo: {nova_qtd}")
+                                st.rerun()
 
 # =========================================================
 # MÓDULO 6: PEÇAS CRÍTICAS E POUCO ESTOQUE (INTEGRADO ESTOQUE + USOS E CONSUMO)
