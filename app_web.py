@@ -34,8 +34,8 @@ def obter_engine():
         st.stop()
 
 def validar_ncm(ncm):
-    if not ncm:
-        return False
+    if not ncm or not ncm.strip():
+        return True  # NCM agora é opcional
     padrao = r"^\d{4}\.\d{2}\.\d{2}$"
     return re.match(padrao, ncm.strip()) is not None
 
@@ -100,9 +100,12 @@ def gerar_pdf_compras(df_itens):
     
     for _, row in df_itens.iterrows():
         origem_str = row.get('origem', 'Estoque')
-        cod_ref_str = f"[{origem_str}]\nCód: {row['cod'] if row['cod'] else 'N/A'}\nREF: {row['cod_ref'] if row['cod_ref'] else 'N/A'}"
+        cod_val = str(row['cod']).strip() if pd.notna(row['cod']) and str(row['cod']).strip() else 'N/A'
+        ref_val = str(row['cod_ref']).strip() if pd.notna(row['cod_ref']) and str(row['cod_ref']).strip() else 'N/A'
+        
+        cod_ref_str = f"[{origem_str}]\nCód: {cod_val}\nREF: {ref_val}"
         nome_str = str(row['nome'])
-        ncm_str = str(row['ncm']) if row['ncm'] else 'N/A'
+        ncm_str = str(row['ncm']).strip() if pd.notna(row['ncm']) and str(row['ncm']).strip() else 'N/A'
         qtd_str = str(int(row['quanti']))
         critico_str = "🚨 CRÍTICO" if row['critico'] else "⚠️ Baixo Estoque"
 
@@ -196,7 +199,7 @@ def inicializar_banco():
                 nome TEXT NOT NULL,
                 cod TEXT,
                 cod_ref TEXT,
-                ncm TEXT NOT NULL,
+                ncm TEXT,
                 estante TEXT,
                 prateleira TEXT,
                 caixa TEXT,
@@ -210,14 +213,14 @@ def inicializar_banco():
             ALTER TABLE estoque ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT FALSE;
         """))
 
-        # Tabela Uso e Consumo
+        # Tabela Uso e Consumo (NCM não obrigatório)
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS uso_consumo (
                 id SERIAL PRIMARY KEY,
                 nome TEXT NOT NULL,
                 cod TEXT,
                 cod_ref TEXT,
-                ncm TEXT NOT NULL,
+                ncm TEXT,
                 estante TEXT,
                 prateleira TEXT,
                 caixa TEXT,
@@ -229,6 +232,7 @@ def inicializar_banco():
 
         conn.execute(text("""
             ALTER TABLE uso_consumo ADD COLUMN IF NOT EXISTS critico BOOLEAN DEFAULT TRUE;
+            ALTER TABLE uso_consumo ALTER COLUMN ncm DROP NOT NULL;
         """))
 
         conn.execute(text("""
@@ -451,7 +455,7 @@ if menu == "📊 Visão Geral / Dashboard":
 # =========================================================
 elif menu == "🧹 Material de Uso e Consumo":
     st.title("🧹 Material de Uso e Consumo")
-    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.). Todos são categorizados automaticamente como CRÍTICOS para acompanhamento diário.")
+    st.caption("Controle e cadastro de materiais consumíveis da empresa (ex: fitas, estanho, pasta de solda, produto de limpeza, etc.). Todos são definidos automaticamente como CRÍTICOS.")
 
     tab_uc_lista, tab_uc_cad, tab_uc_edit = st.tabs([
         "📋 Lista & Estoque Atual",
@@ -497,9 +501,9 @@ elif menu == "🧹 Material de Uso e Consumo":
             nome_uc = st.text_input("Nome do Material / Consumível *", placeholder="Ex: Fita Crepe 18mm, Stretch, Estanho 1mm, Pasta de Solda")
             c1_uc, c2_uc = st.columns(2)
             with c1_uc:
-                cod_uc = st.text_input("Código Interno:")
-                ref_uc = st.text_input("Código de Referência:")
-                ncm_uc = st.text_input("NCM (Formato XXXX.XX.XX) *", placeholder="Ex: 3919.10.00")
+                cod_uc = st.text_input("Código Interno (Opcional):")
+                ref_uc = st.text_input("Código de Referência (Opcional):")
+                ncm_uc = st.text_input("NCM (Opcional - Formato XXXX.XX.XX):", placeholder="Ex: 3919.10.00")
                 preco_uc = st.number_input("Preço / Custo Estimado (R$):", min_value=0.0, step=0.01)
             with c2_uc:
                 estante_uc = st.text_input("Estante / Armário:")
@@ -507,35 +511,37 @@ elif menu == "🧹 Material de Uso e Consumo":
                 caixa_uc = st.text_input("Caixa / Posição:")
                 qtd_uc = st.number_input("Quantidade Inicial em Estoque:", min_value=0, step=1)
 
-            st.info("ℹ️ **Nota:** Todo material de uso e consumo é automaticamente definido como **Item Crítico** para controle diário de reposição.")
+            st.info("ℹ️ **Nota:** Material de uso e consumo é salvo automaticamente como **Item Crítico** para facilitar o acompanhamento diário de compras.")
 
             btn_salvar_uc = st.form_submit_button("💾 CADASTRAR MATERIAL DE CONSUMO")
 
             if btn_salvar_uc:
                 if not nome_uc:
                     st.warning("O campo Nome do Material é obrigatório!")
-                elif not ncm_uc:
-                    st.error("O campo NCM é obrigatório!")
-                elif not validar_ncm(ncm_uc):
-                    st.error("Formato do NCM inválido! Utilize XXXX.XX.XX")
+                elif ncm_uc and not validar_ncm(ncm_uc):
+                    st.error("Formato do NCM inválido! Utilize o padrão XXXX.XX.XX ou deixe em branco.")
                 else:
+                    ncm_final = ncm_uc.strip() if ncm_uc else ""
+                    cod_final = cod_uc.strip() if cod_uc else ""
+                    ref_final = ref_uc.strip() if ref_uc else ""
+
                     with engine.begin() as conn:
                         conn.execute(text("""
                             INSERT INTO uso_consumo (nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico)
                             VALUES (:nome, :cod, :ref, :ncm, :estante, :prateleira, :caixa, :quanti, :preco, TRUE)
                         """), {
-                            "nome": nome_uc.strip(), "cod": cod_uc.strip(), "ref": ref_uc.strip(), "ncm": ncm_uc.strip(),
+                            "nome": nome_uc.strip(), "cod": cod_final, "ref": ref_final, "ncm": ncm_final,
                             "estante": estante_uc.strip(), "prateleira": prateleira_uc.strip(), "caixa": caixa_uc.strip(),
                             "quanti": qtd_uc, "preco": preco_uc
                         })
                     registrar_historico("CADASTRO_USO_CONSUMO", nome_uc.strip(), qtd_uc, "Material de Uso e Consumo (Crítico)")
                     st.cache_data.clear()
-                    st.success(f"Material '{nome_uc}' cadastrado com sucesso como ITEM CRÍTICO!")
+                    st.success(f"Material '{nome_uc}' cadastrado com sucesso!")
                     st.rerun()
 
     # ABA 3: EDIÇÃO E EXCLUSÃO
     with tab_uc_edit:
-        st.subheader("✍️ Editar ou Excluir Material de Uso e Consumo")
+        st.subheader("✍️️ Editar ou Excluir Material de Uso e Consumo")
         df_uc_edit = pd.read_sql("SELECT * FROM uso_consumo ORDER BY nome ASC", engine)
 
         if df_uc_edit.empty:
@@ -552,7 +558,7 @@ elif menu == "🧹 Material de Uso e Consumo":
                 ]
 
             if df_uc_edit_filtrado.empty:
-                st.warning("Nenum material encontrado.")
+                st.warning("Nenhum material encontrado.")
             else:
                 opcoes_uc = {
                     f"[{row['nome']}] - Cód: {row['cod'] if row['cod'] else 'N/A'} | REF: {row['cod_ref'] if row['cod_ref'] else 'N/A'} (ID #{row['id']})": row['id']
@@ -568,9 +574,9 @@ elif menu == "🧹 Material de Uso e Consumo":
                     enome_uc = st.text_input("Nome", value=str(row_uc['nome']))
                     ec1_uc, ec2_uc = st.columns(2)
                     with ec1_uc:
-                        ecod_uc = st.text_input("Código Interno", value=str(row_uc['cod']) if row_uc['cod'] else "")
-                        eref_uc = st.text_input("Código de Referência", value=str(row_uc['cod_ref']) if row_uc['cod_ref'] else "")
-                        encm_uc = st.text_input("NCM", value=str(row_uc['ncm']) if row_uc['ncm'] else "")
+                        ecod_uc = st.text_input("Código Interno (Opcional)", value=str(row_uc['cod']) if row_uc['cod'] else "")
+                        eref_uc = st.text_input("Código de Referência (Opcional)", value=str(row_uc['cod_ref']) if row_uc['cod_ref'] else "")
+                        encm_uc = st.text_input("NCM (Opcional)", value=str(row_uc['ncm']) if row_uc['ncm'] else "")
                         epreco_uc = st.number_input("Preço (R$)", value=float(row_uc['preco']) if row_uc['preco'] else 0.0)
                     with ec2_uc:
                         eestante_uc = st.text_input("Estante / Armário", value=str(row_uc['estante']) if row_uc['estante'] else "")
@@ -588,8 +594,8 @@ elif menu == "🧹 Material de Uso e Consumo":
                         b_del_uc = st.form_submit_button("🗑️ Excluir Material", type="secondary")
 
                     if b_edit_uc:
-                        if not validar_ncm(encm_uc):
-                            st.error("Formato NCM inválido! Use XXXX.XX.XX")
+                        if encm_uc and not validar_ncm(encm_uc):
+                            st.error("Formato NCM inválido! Use XXXX.XX.XX ou deixe em branco.")
                         else:
                             with engine.begin() as conn:
                                 conn.execute(text("""
@@ -918,7 +924,7 @@ elif menu == "📦 Movimentação de Estoque":
     df_estoque = pd.read_sql("SELECT id, nome, cod, cod_ref, quanti, estante, prateleira, caixa FROM estoque ORDER BY nome ASC", engine)
 
     if df_estoque.empty:
-        st.warning("Nenhum material cadastrado para movimentar.")
+        st.warning("Nenum material cadastrado para movimentar.")
     else:
         termo_busca = st.text_input("🔍 Buscar Peça por Nome, Código Interno ou Cód. Referência:")
         
@@ -994,9 +1000,8 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
     
     engine = obter_engine()
     
-    # Consulta unificada das duas tabelas com identificação da Origem
     query_unificada = """
-        SELECT id, nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico, 'Peças / Peças Reposição' AS origem
+        SELECT id, nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico, 'Peças Reposição' AS origem
         FROM estoque
         UNION ALL
         SELECT id, nome, cod, cod_ref, ncm, estante, prateleira, caixa, quanti, preco, critico, 'Uso e Consumo' AS origem
@@ -1056,8 +1061,14 @@ elif menu == "🚨 Peças Críticas e Pouco Estoque":
         if df_resultado.empty:
             st.success("Nenhum item atende aos critérios do filtro selecionado!")
         else:
+            # Tratamento visual para colunas que podem conter Nulos
+            df_exib_res = df_resultado.copy()
+            df_exib_res['cod'] = df_exib_res['cod'].fillna('N/A').replace('', 'N/A')
+            df_exib_res['cod_ref'] = df_exib_res['cod_ref'].fillna('N/A').replace('', 'N/A')
+            df_exib_res['ncm'] = df_exib_res['ncm'].fillna('N/A').replace('', 'N/A')
+
             st.dataframe(
-                df_resultado[['origem', 'nome', 'cod', 'cod_ref', 'quanti', 'critico', 'estante', 'prateleira', 'caixa', 'ncm']],
+                df_exib_res[['origem', 'nome', 'cod', 'cod_ref', 'quanti', 'critico', 'estante', 'prateleira', 'caixa', 'ncm']],
                 use_container_width=True,
                 hide_index=True
             )
